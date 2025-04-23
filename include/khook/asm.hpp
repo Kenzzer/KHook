@@ -18,19 +18,14 @@
 */
 #pragma once
 
+#include "memory.hpp"
+
 #include <cstdint>
 #include <memory>
 #include <cstring>
 #include <cassert>
-#define assertm(exp, msg) assert((void(msg), exp))
-#ifdef WIN32
-#include <memoryapi.h>
-#else
-#include <sys/mman.h>
-#include <unistd.h>
-#endif
 
-#include "memory.hpp"
+#define assertm(exp, msg) assert((void(msg), exp))
 
 namespace KHook
 {
