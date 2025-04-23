@@ -21,6 +21,14 @@
 #include "safetyhook.hpp"
 
 #ifdef KHOOK_X64
+#undef KHOOK_X64
+#endif
+
+#if defined(__x86_64__) || defined(_WIN64)
+#define KHOOK_X64
+#endif
+
+#ifdef KHOOK_X64
 #include "khook/asm/x86_64.hpp"
 #else
 #include "khook/asm/x86.hpp"

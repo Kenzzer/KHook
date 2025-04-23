@@ -145,6 +145,14 @@ KHOOK_API void* GetOriginalValuePtr(bool pop = false);
  */
 KHOOK_API void* GetOverrideValuePtr(bool pop = false);
 
+/**
+ * Destroys every registered hooks.
+ * Will deadlock or crash if used under a hook callback.
+ *
+ * @return
+ */
+KHOOK_API void Shutdown();
+
 template<typename C, typename R, typename... A>
 inline void* ExtractMFP(R (C::*mfp)(A...)) {
 	union {
@@ -375,7 +383,7 @@ protected:
 			return;
 		}
 
-		Return<RETURN> action = (_context) ? ((EmptyClass*)this)->*BuildMFP<EmptyClass, Return<RETURN>, ARGS...>(args...) : (*callback)(args...);
+		Return<RETURN> action = (_context) ? (((EmptyClass*)this)->*BuildMFP<EmptyClass, Return<RETURN>, ARGS...>(context_callback))(args...) : (*callback)(args...);
 		if (action.action > this->_action) {
 			this->_action = action.action;
 			if constexpr(!std::is_same<RETURN, void>::value) {
@@ -1038,7 +1046,7 @@ template<typename CLASS, typename RETURN, typename... ARGS>
 #ifdef WIN32
 inline std::int32_t __GetMFPVtableIndex__(RETURN (CLASS::*function)(ARGS...)) {
 	std::int32_t vtblindex = 0;
-	if (GetVtableIndex(ExtractMFP(function), vtblindex)) {
+	if (GetVtableIndex((std::uint8_t*)ExtractMFP(function), vtblindex)) {
 		return vtblindex;
 	}
 	return -1;

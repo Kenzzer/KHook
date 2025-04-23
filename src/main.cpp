@@ -8,23 +8,23 @@ int original_function(float p1, int p2, float p3, int p4, double p5) {
     return 34;
 }
 
-KHook::HookAction<int> original_function_pre(float p1, int p2, float p3, int p4, double p5) {
+KHook::Return<int> original_function_pre(float p1, int p2, float p3, int p4, double p5) {
     std::cout << "pre" << std::endl;
     return { KHook::Action::Ignore };
 }
 
-KHook::HookAction<int> original_function_post(float p1, int p2, float p3, int p4, double p5) {
+KHook::Return<int> original_function_post(float p1, int p2, float p3, int p4, double p5) {
     std::cout << "post" << std::endl;
     return { KHook::Action::Ignore, 52 };
 }
 
-KHook::HookAction<int> original_function_post2(float p1, int p2, float p3, int p4, double p5) {
+KHook::Return<int> original_function_post2(float p1, int p2, float p3, int p4, double p5) {
     std::cout << "post 2" << std::endl;
     return { KHook::Action::Supercede, 49 };
 }
 
-KHook::FunctionHook testHook(original_function, original_function_pre, original_function_post);
-KHook::FunctionHook testHook2(original_function, original_function_pre, original_function_post2);
+KHook::Function testHook(original_function, original_function_pre, original_function_post);
+KHook::Function testHook2(original_function, original_function_pre, original_function_post2);
 
 class TestClass {
 public:
@@ -42,20 +42,20 @@ public:
     }
 };
 
-KHook::HookAction<float> test_pre(TestClass* ptr, float x, float y, float z) {
+KHook::Return<float> test_pre(TestClass* ptr, float x, float y, float z) {
     std::cout << "pre" << std::endl;
-    return { KHook::Action::Supercede, 43.0 };
+    return { KHook::Action::Ignore, 43.0 };
 }
 
-KHook::HookAction<float> test_post(TestClass* ptr, float x, float y, float z) {
+KHook::Return<float> test_post(TestClass* ptr, float x, float y, float z) {
     std::cout << "post" << std::endl;
     return { KHook::Action::Supercede, 57.0 };
 }
 
-KHook::VirtualMemberHook testHook3(&TestClass::Test, test_pre, test_post);
+KHook::Virtual testHook3(&TestClass::Test, test_pre, test_post);
 
 int main() {
-    //std::cin.get();
+    std::cin.get();
     /*std::cout << "Call original_function" << std::endl;
     int ret = original_function(4.0, 5, 6.0, 2, 7.0);
     std::cout << "return : " << std::dec << ret << std::endl;
@@ -72,5 +72,7 @@ int main() {
     //ret2 = (&cls->*mfp)(5, 2, 7);
     float ret2 = cls.Test(5, 2, 7);
     std::cout << "cls return : " << std::dec << ret2 << std::endl;
+
+    KHook::Shutdown();
     return 0;
 }

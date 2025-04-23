@@ -38,10 +38,10 @@ namespace KHook
 				prot = PAGE_READONLY; break;
 			case Flags::READ | Flags::WRITE:
 				prot = PAGE_READWRITE; break;
-			case Flags::READ | Flags::EXEC:
+			case Flags::READ | Flags::EXECUTE:
 				prot = PAGE_EXECUTE_READ; break;
 			default:
-			case Flags::READ | Flags::WRITE | Flags::EXEC:
+			case Flags::READ | Flags::WRITE | Flags::EXECUTE:
 				prot = PAGE_EXECUTE_READWRITE; break;
 			}
 			return VirtualProtect(addr, len, prot, &tmp) ? true : false;
