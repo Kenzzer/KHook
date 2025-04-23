@@ -2,7 +2,7 @@
 * Copyright (C) 2025
 * No warranties of any kind
 *
-* License: zlib/libpng
+* License: ZLIB
 *
 * Author(s): Benoist "Kenzzer" ANDRÉ
 * ============================
@@ -11,6 +11,8 @@
 
 #include <cstdint>
 #ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
+#include <windows.h>
 #else
 #include <sys/mman.h>
 #include <unistd.h>

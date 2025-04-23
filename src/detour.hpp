@@ -1,3 +1,12 @@
+/* ======== KHook ========
+* Copyright (C) 2025
+* No warranties of any kind
+*
+* License: ZLIB
+*
+* Author(s): Benoist "Kenzzer" ANDRÉ
+* ============================
+*/
 #pragma once
 #include <cstdint>
 #include <mutex>
