@@ -19,9 +19,6 @@ for compiler in KHook.all_targets:
         os.path.join(builder.currentSourcePath, 'third_party', 'safetyhook', 'include')
     ]
 
-    if binary.compiler.target.arch == 'x86_64':
-        binary.compiler.defines += ['KHOOK_X64']
-
     for task in KHook.libsafetyhook:
         if task.target.arch == binary.compiler.target.arch:
             binary.compiler.linkflags += [task.binary]

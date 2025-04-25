@@ -11,7 +11,7 @@ namespace KHook {
 #define FUNCTION_ATTRIBUTE_PREFIX(ret) ret
 #define FUNCTION_ATTRIBUTE_SUFFIX
 #else
-#ifdef WIN32
+#ifdef _WIN32
 #define FUNCTION_ATTRIBUTE_PREFIX(ret) ret __cdecl
 #define FUNCTION_ATTRIBUTE_SUFFIX
 #else
@@ -20,7 +20,7 @@ namespace KHook {
 #endif
 #endif
 
-#ifdef WIN32
+#ifdef _WIN32
 #define LINUX_ONLY(x)
 #define WIN_ONLY(x) x
 #else
@@ -31,7 +31,7 @@ namespace KHook {
 template<typename T, typename Ret, typename... Args>
 union MFP {
 	MFP(Ret (T::*func)(Args...)) : mfp(func) {
-#ifdef WIN32
+#ifdef _WIN32
 #else
 		this->details.adjustor = 0;
 #endif
@@ -39,7 +39,7 @@ union MFP {
 	Ret (T::*mfp)(Args...);
 	struct {
 		void *addr;
-#ifdef WIN32
+#ifdef _WIN32
 #else
 		intptr_t adjustor;
 #endif
@@ -369,7 +369,7 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 		jit.call(rax);
 	};
 
-#ifdef WIN32
+#ifdef _WIN32
 	// Save everything pertaining to Windows x86_64 callconv
 	static const x86_64_Reg reg[] = { rcx, rdx, r8, r9 }; // 32 bytes so 16 bytes aligned
 	// Save XMM0-XMM5
@@ -1028,13 +1028,13 @@ void DetourCapsule::RemoveHook(HookID_t id, bool async) {
 		void (EmptyClass::*mfp)(HookID_t id);
 		struct {
 			void* addr;
-#ifdef WIN32
+#ifdef _WIN32
 #else
 			intptr_t adjustor;
 #endif
 		} details;
 	} u;
-#ifdef WIN32
+#ifdef _WIN32
 #else
 	u.details.adjustor = 0;
 #endif

@@ -455,7 +455,7 @@ namespace KHook
 
 				void FreeRegion()
 				{
-#ifdef WIN32
+#ifdef _WIN32
 					VirtualFree(startPtr, 0, MEM_RELEASE);
 #else
 					munmap(startPtr, size);
@@ -494,7 +494,7 @@ namespace KHook
 				if (newRegion.size < minSize)
 					newRegion.size += m_PageSize;
 
-#ifdef WIN32
+#ifdef _WIN32
 				newRegion.startPtr = VirtualAlloc(nullptr, newRegion.size, MEM_COMMIT, PAGE_READWRITE);
 #else
 				newRegion.startPtr = mmap(0, newRegion.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
@@ -537,7 +537,7 @@ namespace KHook
 		public:
 			CPageAlloc(size_t minAlignment = 4 /* power of 2 */ ) : m_MinAlignment(minAlignment)
 			{
-#ifdef WIN32
+#ifdef _WIN32
 				SYSTEM_INFO sysInfo;
 				GetSystemInfo(&sysInfo);
 				m_PageSize = sysInfo.dwPageSize;

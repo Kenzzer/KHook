@@ -18,13 +18,13 @@
 
 #ifdef KHOOK_STANDALONE
 #ifdef KHOOK_EXPORT
-#ifdef WIN32
+#ifdef _WIN32
 #define KHOOK_API __declspec(dllexport)
 #else
 #define KHOOK_API __attribute__((visibility("default")))
 #endif
 #else
-#ifdef WIN32
+#ifdef _WIN32
 #define KHOOK_API __declspec(dllimport)
 #else
 #define KHOOK_API __attribute__((visibility("default")))
@@ -159,7 +159,7 @@ inline void* ExtractMFP(R (C::*mfp)(A...)) {
 		R (C::*mfp)(A...);
 		struct {
 			void* addr;
-#ifdef WIN32
+#ifdef _WIN32
 #else
 			intptr_t adjustor;
 #endif
@@ -179,7 +179,7 @@ inline __callback__<C, R, A...> BuildMFP(void* addr) {
 		R (C::*mfp)(A...);
 		struct {
 			void* addr;
-#ifdef WIN32
+#ifdef _WIN32
 #else
 			intptr_t adjustor;
 #endif
@@ -187,7 +187,7 @@ inline __callback__<C, R, A...> BuildMFP(void* addr) {
 	} open;
 
 	open.details.addr = addr;
-#ifdef WIN32
+#ifdef _WIN32
 #else
 	open.details.adjustor = 0;
 #endif
@@ -997,7 +997,7 @@ protected:
 	}
 };
 
-#ifdef WIN32
+#ifdef _WIN32
 inline bool GetVtableIndex(std::uint8_t* func_addr, std::int32_t& vtbl_index) {
 	// jmp 'near'
 	if (func_addr[0] == 0xE9) {
@@ -1043,7 +1043,7 @@ inline bool GetVtableIndex(std::uint8_t* func_addr, std::int32_t& vtbl_index) {
 #endif
 
 template<typename CLASS, typename RETURN, typename... ARGS>
-#ifdef WIN32
+#ifdef _WIN32
 inline std::int32_t __GetMFPVtableIndex__(RETURN (CLASS::*function)(ARGS...)) {
 	std::int32_t vtblindex = 0;
 	if (GetVtableIndex((std::uint8_t*)ExtractMFP(function), vtblindex)) {
