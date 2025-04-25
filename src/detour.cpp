@@ -115,7 +115,10 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) RecursiveLockUnlockShared(std::shared_mut
 static FUNCTION_ATTRIBUTE_PREFIX(void) PrintRSP(std::uintptr_t rsp) FUNCTION_ATTRIBUTE_SUFFIX {
 	std::cout << "RSP : 0x" << std::hex << rsp << std::endl;
 	for (int i = 0; i < 10; i++) {
-		std::cout << "[0x" << std::hex << (rsp + (i * sizeof(void*))) << "](RSP + 0x" << i * sizeof(void*) << ") : 0x" << std::hex << *(std::uintptr_t*)(((std::uint8_t*)rsp) + i * sizeof(void*)) << std::endl;
+		auto ptr = (((std::uint8_t*)rsp) + i * sizeof(void*));
+		std::cout << "[0x" << std::hex << (rsp + (i * sizeof(void*))) << "](RSP + 0x" << i * sizeof(void*) << ") : 0x" << std::hex << *(std::uintptr_t*)ptr
+		<< std::dec <<  " float(" << *(float*)ptr << ")"
+		<< std::endl;
 	}
 }
 
@@ -387,8 +390,9 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 	_jit.sub(rsp, local_params_size);
 
 	// Save general purpose registers
+	_jit.sub(rsp, sizeof(void*) * reg_count);
 	for (int i = 0; i < reg_count; i++) {
-		_jit.push(reg[i]);
+		_jit.mov(rsp(sizeof(void*) * i), reg[i]);
 	}
 	// Save floating point registers
 	_jit.sub(rsp, 16 * float_reg_count);
@@ -396,22 +400,25 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 		_jit.movsd(rsp(16 * i), float_reg[i]);
 	}
 
+	//print_rsp(_jit);
+
 	// Introduce shadow space
 	WIN_ONLY(_jit.sub(rsp, 32));
+	
 	// Bytes offset to get back at where we saved our data
 	static constexpr auto reg_start = WIN_ONLY(32) LINUX_ONLY(0);
 
 	// Restore floating point registers
 	static auto restore_float_regs = [](DetourCapsule::AsmJit& jit, std::uint32_t func_param_stack_size) {
 		for (int i = 0; i < float_reg_count; i++) {
-			jit.movsd(float_reg[i], rsp(reg_start + func_param_stack_size + (16 * (float_reg_count - 1)) - (16 * i)));
+			jit.movsd(float_reg[i], rsp(reg_start + func_param_stack_size + 16 * i));
 		}
 	};
 
 	// Restore regular registers
 	static auto restore_reg = [](DetourCapsule::AsmJit& jit, std::uint32_t func_param_stack_size) {
 		for (int i = 0; i < reg_count; i++) {
-			jit.mov(reg[i], rsp(reg_start + func_param_stack_size + (16 * float_reg_count) + (8 * (reg_count - 1)) - (8 * i)));
+			jit.mov(reg[i], rsp(reg_start + func_param_stack_size + (16 * float_reg_count) + 8 * i));
 		}
 	};
 
@@ -1193,6 +1200,5 @@ KHOOK_API void Shutdown() {
 	g_hooks_detour.clear();
 	g_hooks_detour_mutex.unlock();
 }
-
 
 }
