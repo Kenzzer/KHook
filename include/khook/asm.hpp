@@ -2,7 +2,7 @@
 * Copyright (C) 2025
 * No warranties of any kind
 *
-* License: ZLIB
+* License: zLib License
 *
 * Author(s): Benoist "Kenzzer" ANDRÉ
 * ============================
