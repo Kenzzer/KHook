@@ -49,6 +49,15 @@ jobs:
           submodules: recursive
           path: repository
 
+      - uses: actions/checkout@v4
+        name: AMBuild checkout
+        with:
+          repository: alliedmodders/ambuild
+          ref: fe8c99ccd24fa926bf6ac6b9935a5fc03df06a72
+          fetch-depth: 0
+          submodules: recursive
+          path: ambuild
+
       - name: Setup AMBuild
         shell: bash
         run: |
