@@ -24,9 +24,9 @@ Built on top of another detouring library named [SafetyHook](https://github.com/
 Each PRE & POST callback is invoked with the exact same parameters and calling convention as the detoured function. Each invoked consumer callback is then offered the possibility by KHook to retrieve (through a thread-local global function) a context pointer, the same context pointer the consummer gave when registering the detour. At the end of a callback execution, the consumer must inform KHook which "Action" they wish to take against the detoured function and they must also provide KHook with a pointer to the return value.
 
 "Action" is the choice each consummer is given when their callbacks get invoked for a detoured function. Three actions are possible :
-- `KHook::Action::Ignore` | No actions should be taken.
-- `KHook::Action::Override` | The original function should be called, but the return value must be overwritten with the provided return value ptr.
-- `KHook::Action::Supercede` | Same as `KHook::Action::Override` but the original function won't be called.
+- `KHook::Action::Ignore` <br/> No actions should be taken.
+- `KHook::Action::Override` <br/> The original function should be called, but the return value must be overwritten with the provided return value ptr.
+- `KHook::Action::Supercede` <br/> Same as `KHook::Action::Override` but the original function won't be called.
 
 > [!NOTE] 
 > As its description imply, using `KHook::Action::Supercede` under a POST callback will not prevent the original function from being called because it has been already called.
@@ -35,9 +35,10 @@ Each PRE & POST callback is invoked with the exact same parameters and calling c
 > KHook will override the return value with whichever hook took `KHook::Action::Override` or `KHook::Action::Supercede` first. Meaning if two callbacks set `KHook::Action::Supercede` as their action, only the first invoked callback will see its return value pointer used. KHook makes no effort at resolving such conflicts.
 
 In order to simplify the library usage KHook provides a few class templates that automatically handle the registration of callbacks and return value pointers.
-- `KHook::Function<return_type, args...> hook(precallback, postcallback)` | Template for generic functions.
-- `KHook::Member<DetourClassName, return_type, args...> hook(precallback, postcallback)` | Template for member functions.
-- `KHook::Virtual<DetourClassName, return_type, args...> hook(precallback, postcallback)` | Template for virtual member functions.
+- `KHook::Function<return_type, args...> hook(precallback, postcallback)` <br/> Template for generic functions.
+- `KHook::Member<DetourClassName, return_type, args...> hook(precallback, postcallback)` <br/> Template for member functions.
+- `KHook::Virtual<DetourClassName, return_type, args...> hook(precallback, postcallback)` <br/> Template for virtual member functions.
+
 A callback definition looks like this :
 ```cpp
 // KHook::Function
@@ -60,6 +61,7 @@ If context is required a context pointer can be provided to the constructor.
 - `KHook::Function<return_type, args...> hook(context, precallback, postcallback)`
 - `KHook::Member<DetourClassName, return_type, args...> hook(context, precallback, postcallback)`
 - `KHook::Virtual<DetourClassName, return_type, args...> hook(context, precallback, postcallback)`
+
 Providing a context pointer changes the callback definition to :
 ```cpp
 // KHook::Function
