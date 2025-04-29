@@ -170,15 +170,56 @@ inline void* ExtractMFP(R (C::*mfp)(A...)) {
 	return open.details.addr;
 }
 
+template<typename C, typename R, typename... A>
+inline const void* ExtractMFP(R (C::*mfp)(A...) const) {
+	union {
+		R (C::*mfp)(A...) const;
+		struct {
+			const void* addr;
+#ifdef _WIN32
+#else
+			intptr_t adjustor;
+#endif
+		} details;
+	} open;
+
+	open.mfp = mfp;
+	return open.details.addr;
+}
+
 template<typename CLASS, typename RETURN, typename... ARGS>
-using __callback__ = RETURN (CLASS::*)(ARGS...);
+using __mfp_const__ = RETURN (CLASS::*)(ARGS...) const;
+
+template<typename CLASS, typename RETURN, typename... ARGS>
+using __mfp__ = RETURN (CLASS::*)(ARGS...);
 
 template<typename C, typename R, typename... A>
-inline __callback__<C, R, A...> BuildMFP(void* addr) {
+inline __mfp__<C, R, A...> BuildMFP(void* addr) {
 	union {
 		R (C::*mfp)(A...);
 		struct {
 			void* addr;
+#ifdef _WIN32
+#else
+			intptr_t adjustor;
+#endif
+		} details;
+	} open;
+
+	open.details.addr = addr;
+#ifdef _WIN32
+#else
+	open.details.adjustor = 0;
+#endif
+	return open.mfp;
+}
+
+template<typename C, typename R, typename... A>
+inline __mfp_const__<C, R, A...> BuildMFP(const void* addr) {
+	union {
+		R (C::*mfp)(A...) const;
+		struct {
+			const void* addr;
 #ifdef _WIN32
 #else
 			intptr_t adjustor;
@@ -450,9 +491,13 @@ class Member : protected Hook<RETURN> {
 public:
 	template<typename CONTEXT>
 	using fnContextCallback = ::KHook::Return<RETURN> (CONTEXT::*)(CLASS*, ARGS...);
+	template<typename CONTEXT>
+	using fnContextCallbackConst = ::KHook::Return<RETURN> (CONTEXT::*)(const CLASS*, ARGS...);
 	using fnCallback = ::KHook::Return<RETURN> (*)(CLASS*, ARGS...);
+	using fnCallbackConst = ::KHook::Return<RETURN> (*)(const CLASS*, ARGS...);
 	using Self = ::KHook::Member<CLASS, RETURN, ARGS...>;
 
+	// CTOR - No function
 	Member(fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
@@ -463,7 +508,20 @@ public:
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
 	}
+	
+	// CTOR - CONST - No function
+	Member(fnCallbackConst pre, fnCallbackConst post) : 
+		_pre_callback(reinterpret_cast<fnCallback>(pre)),
+		_post_callback(reinterpret_cast<fnCallback>(post)),
+		_context(nullptr),
+		_context_pre_callback(nullptr),
+		_context_post_callback(nullptr),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+	}
 
+	// CTOR - Function
 	Member(RETURN (CLASS::*function)(ARGS...), fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
@@ -475,7 +533,21 @@ public:
 		_hooked_addr(nullptr) {
 		Configure(ExtractMFP(function));
 	}
+	
+	// CTOR - CONST - Function
+	Member(RETURN (CLASS::*function)(ARGS...) const, fnCallbackConst pre, fnCallbackConst post) : 
+		_pre_callback(pre),
+		_post_callback(post),
+		_context(nullptr),
+		_context_pre_callback(nullptr),
+		_context_post_callback(nullptr),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+		Configure(ExtractMFP(function));
+	}
 
+	// CTOR - No function - Context
 	template<typename CONTEXT>
 	Member(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
@@ -487,7 +559,21 @@ public:
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
 	}
+	
+	// CTOR - CONST - No function - Context
+	template<typename CONTEXT>
+	Member(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(ExtractMFP(post)),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+	}
 
+	// CTOR - No function - Context - NULL POST
 	template<typename CONTEXT>
 	Member(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
@@ -499,7 +585,21 @@ public:
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
 	}
+	
+	// CTOR - CONST - No function - Context - NULL POST
+	template<typename CONTEXT>
+	Member(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(nullptr),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+	}
 
+	// CTOR - No function - Context - NULL PRE
 	template<typename CONTEXT>
 	Member(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
@@ -511,7 +611,21 @@ public:
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
 	}
+	
+	// CTOR - CONST - No function - Context - NULL PRE
+	template<typename CONTEXT>
+	Member(CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(nullptr),
+		_context_post_callback(ExtractMFP(post)),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+	}
 
+	// CTOR - Function - Context
 	template<typename CONTEXT>
 	Member(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
@@ -524,7 +638,22 @@ public:
 		_hooked_addr(nullptr) {
 		Configure(ExtractMFP(function));
 	}
+	
+	// CTOR - CONST - Function - Context
+	template<typename CONTEXT>
+	Member(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(ExtractMFP(post)),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+		Configure(ExtractMFP(function));
+	}
 
+	// CTOR - Function - Context - NULL POST
 	template<typename CONTEXT>
 	Member(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
@@ -537,9 +666,38 @@ public:
 		_hooked_addr(nullptr) {
 		Configure(ExtractMFP(function));
 	}
+	
+	// CTOR - CONST - Function - Context - NULL POST
+	template<typename CONTEXT>
+	Member(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(nullptr),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+		Configure(ExtractMFP(function));
+	}
 
+	// CTOR - Function - Context - NULL PRE
 	template<typename CONTEXT>
 	Member(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(nullptr),
+		_context_post_callback(ExtractMFP(post)),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+		Configure(ExtractMFP(function));
+	}
+	
+	// CTOR - CONST - Function - Context - NULL PRE
+	template<typename CONTEXT>
+	Member(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
 		_context(context),
@@ -697,16 +855,29 @@ protected:
 };
 
 template<typename CLASS, typename RETURN, typename... ARGS>
-inline std::int32_t __GetMFPVtableIndex__(RETURN (CLASS::*function)(ARGS...));
+inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...));
 
 template<typename CLASS, typename RETURN, typename... ARGS>
-inline void* GetVirtualFunction(RETURN (CLASS::*mfp)(ARGS...), CLASS* ptr) {
+inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...) const);
+
+template<typename CLASS, typename RETURN, typename... ARGS>
+inline __mfp__<CLASS, RETURN, ARGS...> GetVtableFunction(CLASS* ptr, RETURN (CLASS::*mfp)(ARGS...)) {
 	void** vtable = *(void***)ptr;
-	auto index = ::KHook::__GetMFPVtableIndex__(mfp);
+	auto index = ::KHook::GetVtableIndex(mfp);
 	if (index == -1) {
 		return nullptr;
 	}
-	return vtable[index];
+	return BuildMFP<CLASS, RETURN, ARGS...>(vtable[index]);
+}
+
+template<typename CLASS, typename RETURN, typename... ARGS>
+inline __mfp_const__<CLASS, RETURN, ARGS...> GetVtableFunction(const CLASS* ptr, RETURN (CLASS::*mfp)(ARGS...) const) {
+	const void** vtable = *(const void***)ptr;
+	auto index = ::KHook::GetVtableIndex(mfp);
+	if (index == -1) {
+		return nullptr;
+	}
+	return BuildMFP<CLASS, RETURN, ARGS...>(vtable[index]);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
@@ -716,29 +887,57 @@ class Virtual : protected Hook<RETURN> {
 public:
 	template<typename CONTEXT>
 	using fnContextCallback = ::KHook::Return<RETURN> (CONTEXT::*)(CLASS*, ARGS...);
+	template<typename CONTEXT>
+	using fnContextCallbackConst = ::KHook::Return<RETURN> (CONTEXT::*)(const CLASS*, ARGS...);
 	using fnCallback = ::KHook::Return<RETURN> (*)(CLASS*, ARGS...);
+	using fnCallbackConst = ::KHook::Return<RETURN> (*)(const CLASS*, ARGS...);
 	using Self = ::KHook::Virtual<CLASS, RETURN, ARGS...>;
 
+	// CTOR - No function
 	Virtual(fnCallback pre, fnCallback post) :
 		_pre_callback(pre),
 		_post_callback(post),
 		_context(nullptr),
 		_context_pre_callback(nullptr),
 		_context_post_callback(nullptr),
-		_vtbl_index(0),
+		_vtbl_index(INVALID_VTBL_INDEX),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - No function
+	Virtual(fnCallbackConst pre, fnCallbackConst post) :
+		_pre_callback(reinterpret_cast<fnCallback>(pre)),
+		_post_callback(reinterpret_cast<fnCallback>(post)),
+		_context(nullptr),
+		_context_pre_callback(nullptr),
+		_context_post_callback(nullptr),
+		_vtbl_index(INVALID_VTBL_INDEX),
 		_in_deletion(false) {
 	}
 
+	// CTOR - Function
 	Virtual(RETURN (CLASS::*function)(ARGS...), fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
 		_context(nullptr),
 		_context_pre_callback(nullptr),
 		_context_post_callback(nullptr),
-		_vtbl_index(__GetMFPVtableIndex__(function)),
+		_vtbl_index(GetVtableIndex(function)),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - Function
+	Virtual(RETURN (CLASS::*function)(ARGS...) const, fnCallbackConst pre, fnCallbackConst post) : 
+		_pre_callback(reinterpret_cast<fnCallback>(pre)),
+		_post_callback(reinterpret_cast<fnCallback>(post)),
+		_context(nullptr),
+		_context_pre_callback(nullptr),
+		_context_post_callback(nullptr),
+		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
 
+	// CTOR - No Function - Context
 	template<typename CONTEXT>
 	Virtual(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) :
 		_pre_callback(nullptr),
@@ -746,10 +945,23 @@ public:
 		_context(context),
 		_context_pre_callback(ExtractMFP(pre)),
 		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(0),
+		_vtbl_index(INVALID_VTBL_INDEX),
 		_in_deletion(false) {
 	}
 
+	// CTOR - CONST - No Function - Context
+	template<typename CONTEXT>
+	Virtual(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(ExtractMFP(post)),
+		_vtbl_index(INVALID_VTBL_INDEX),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - No function - Context - NULL PRE
 	template<typename CONTEXT>
 	Virtual(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) :
 		_pre_callback(nullptr),
@@ -757,10 +969,23 @@ public:
 		_context(context),
 		_context_pre_callback(nullptr),
 		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(0),
+		_vtbl_index(INVALID_VTBL_INDEX),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - No function - Context - NULL PRE
+	template<typename CONTEXT>
+	Virtual(CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(nullptr),
+		_context_post_callback(ExtractMFP(post)),
+		_vtbl_index(INVALID_VTBL_INDEX),
 		_in_deletion(false) {
 	}
 
+	// CTOR - No function - Context - NULL POST
 	template<typename CONTEXT>
 	Virtual(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) :
 		_pre_callback(nullptr),
@@ -768,10 +993,23 @@ public:
 		_context(context),
 		_context_pre_callback(ExtractMFP(pre)),
 		_context_post_callback(nullptr),
-		_vtbl_index(0),
+		_vtbl_index(INVALID_VTBL_INDEX),
 		_in_deletion(false) {
 	}
 
+	// CTOR - CONST - No function - Context - NULL POST
+	template<typename CONTEXT>
+	Virtual(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(nullptr),
+		_vtbl_index(INVALID_VTBL_INDEX),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - Function - Context
 	template<typename CONTEXT>
 	Virtual(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
@@ -779,10 +1017,23 @@ public:
 		_context(context),
 		_context_pre_callback(ExtractMFP(pre)),
 		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(__GetMFPVtableIndex__(function)),
+		_vtbl_index(GetVtableIndex(function)),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - Function - Context
+	template<typename CONTEXT>
+	Virtual(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(ExtractMFP(post)),
+		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
 
+	// CTOR - Function - Context - NULL PRE
 	template<typename CONTEXT>
 	Virtual(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
@@ -790,10 +1041,23 @@ public:
 		_context(context),
 		_context_pre_callback(nullptr),
 		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(__GetMFPVtableIndex__(function)),
+		_vtbl_index(GetVtableIndex(function)),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - Function - Context - NULL PRE
+	template<typename CONTEXT>
+	Virtual(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(nullptr),
+		_context_post_callback(ExtractMFP(post)),
+		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
 
+	// CTOR - Function - Context - NULL POST
 	template<typename CONTEXT>
 	Virtual(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
@@ -801,7 +1065,19 @@ public:
 		_context(context),
 		_context_pre_callback(ExtractMFP(pre)),
 		_context_post_callback(nullptr),
-		_vtbl_index(__GetMFPVtableIndex__(function)),
+		_vtbl_index(GetVtableIndex(function)),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - Function - Context - NULL POST
+	template<typename CONTEXT>
+	Virtual(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_context(context),
+		_context_pre_callback(ExtractMFP(pre)),
+		_context_post_callback(nullptr),
+		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
 
@@ -881,7 +1157,7 @@ protected:
 	}
 
 	void Configure(void** vtable) {
-		if (vtable == nullptr || _in_deletion) {
+		if (vtable == nullptr || _in_deletion || _vtbl_index == INVALID_VTBL_INDEX) {
 			return;
 		}
 
@@ -998,7 +1274,8 @@ protected:
 };
 
 #ifdef _WIN32
-inline bool GetVtableIndex(std::uint8_t* func_addr, std::int32_t& vtbl_index) {
+inline std::int32_t __GetVtableIndex__(const std::uint8_t* func_addr) {
+	std::int32_t vtbl_index = 0;
 	// jmp 'near'
 	if (func_addr[0] == 0xE9) {
 		func_addr = func_addr + *((std::int32_t*)(func_addr + 1)) + 5;
@@ -1019,57 +1296,64 @@ inline bool GetVtableIndex(std::uint8_t* func_addr, std::int32_t& vtbl_index) {
 		func_addr[4] == 0x8B && func_addr[5] == 0x00) {
 		func_addr = func_addr + 6;
 	} else {
-		return false;
+		return -1;
 	}
 #endif
 	// jmp [rax] DISP 0
 	if (func_addr[0] == 0xFF && func_addr[1] == 0x20) {
 		// Instant jump, so no offset
 		vtbl_index = 0;
-		return true;
+		return vtbl_index;
 	}
 	// jmp [rax + 0xHH] DISP 8
 	else if (func_addr[0] == 0xFF && func_addr[1] == 0x60) {
 		vtbl_index = *((std::int8_t*)(func_addr + 2)) / sizeof(void*);
-		return true;
+		return vtbl_index;
 	}
 	// jmp [rax + 0xHHHHHHHH] DISP 32
 	else if (func_addr[3] == 0xFF && func_addr[4] == 0xA0) {
 		vtbl_index = *((std::int32_t*)(func_addr + 2)) / sizeof(void*);
-		return true;
-	}
-	return false;
-}
-#endif
-
-template<typename CLASS, typename RETURN, typename... ARGS>
-#ifdef _WIN32
-inline std::int32_t __GetMFPVtableIndex__(RETURN (CLASS::*function)(ARGS...)) {
-	std::int32_t vtblindex = 0;
-	if (GetVtableIndex((std::uint8_t*)ExtractMFP(function), vtblindex)) {
-		return vtblindex;
+		return vtbl_index;
 	}
 	return -1;
 }
-#else
-inline std::int32_t __GetMFPVtableIndex__(RETURN (CLASS::*function)(ARGS...)) {
-	struct MFPInfo
+#endif
+
+struct __MFPInfo__
+{
+	union
 	{
-		union
-		{
-			void* addr;
-			std::intptr_t vtbl_index;
-		};
-		std::intptr_t delta;
+		void* addr;
+		std::intptr_t vtbl_index;
 	};
-	
-	MFPInfo* info = (MFPInfo*)&function;
+	std::intptr_t delta;
+};
+
+template<typename CLASS, typename RETURN, typename... ARGS>
+inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...)) {
+#ifdef _WIN32
+	return __GetVtableIndex__(reinterpret_cast<const std::uint8_t*>(ExtractMFP(function)));
+#else
+	__MFPInfo__* info = (__MFPInfo__*)&function;
 	if (info->vtbl_index & 1) {
 		return (info->vtbl_index - 1) / sizeof(void*);
 	}
 	return -1;
-}
 #endif
+}
+
+template<typename CLASS, typename RETURN, typename... ARGS>
+inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...) const) {
+#ifdef _WIN32
+	return __GetVtableIndex__(reinterpret_cast<const std::uint8_t*>(ExtractMFP(function)));
+#else
+	__MFPInfo__* info = (__MFPInfo__*)&function;
+	if (info->vtbl_index & 1) {
+		return (info->vtbl_index - 1) / sizeof(void*);
+	}
+	return -1;
+#endif
+}
 
 class IKHook {
 public:
