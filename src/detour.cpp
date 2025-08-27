@@ -119,8 +119,10 @@ struct AsmLoopDetails {
 	std::uintptr_t fn_make_call_original;
 	// The original return value ptr
 	std::uintptr_t original_return_ptr;
+	std::uintptr_t original_delete_operator;
 	// The current override return ptr
 	std::uintptr_t override_return_ptr;
+	std::uintptr_t override_delete_operator;
 
 	// Where we saved the registers
 	std::uintptr_t sp_saved_registers;
@@ -131,9 +133,7 @@ struct AsmLoopDetails {
 	std::uintptr_t fn_recall_function_ptr;
 	DetourCapsule* capsule;
 #ifndef KHOOK_X64
-#ifndef _WIN64
-	std::uint8_t pad[9];
-#endif
+	std::uint8_t pad[1];
 #else
 	std::uint8_t pad[8];
 #endif
@@ -145,10 +145,7 @@ static_assert(local_params_size % 16 == 0);
 
 static thread_local std::stack<AsmLoopDetails*> g_saved_params;
 static thread_local bool g_is_in_recall = false;
-static thread_local void* g_original_return = nullptr;
-static thread_local void* g_override_return = nullptr;
-static thread_local std::shared_mutex* g_hook_mutex = nullptr;
-static thread_local std::uintptr_t g_recall_count = 0;
+static thread_local AsmLoopDetails g_last_loop;
 
 static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_callback) FUNCTION_ATTRIBUTE_SUFFIX {
 	if (g_saved_params.top() != loop || g_is_in_recall) {
@@ -167,13 +164,8 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_c
 		g_saved_params.pop();
 	} else {
 		// Natural end of a detour, setup everything because AsmLoopDetails is about to go invalid (due to stack being freed)
-		if (loop->recall_count == 0) {
-			// Stack is about to freed, so everything
-			g_original_return = reinterpret_cast<void*>(loop->original_return_ptr);
-			g_override_return = reinterpret_cast<void*>(loop->override_return_ptr);
-			g_recall_count = loop->recall_count;
-			g_hook_mutex = &loop->capsule->_detour_mutex;
-		} else {
+		g_last_loop = *loop;
+		if (loop->recall_count != 0) {
 			RecursiveLockUnlockShared(&loop->capsule->_detour_mutex, false);
 		}
 	}
@@ -204,13 +196,8 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 		}
 
 		if (loop->pre_loop_over == false) {
-			// Recall happened in a pre-loop, save what they sent
+			// Recall happened in a pre-loop, move to next iterator
 			auto hook = reinterpret_cast<DetourCapsule::LinkedList*>(loop->linked_list_it);
-			if (*hook->hook_action > (KHook::Action)loop->action) {
-				loop->fn_make_return = hook->fn_make_override_return;
-				loop->override_return_ptr = hook->override_return_ptr;
-				loop->action = (std::uintptr_t)*hook->hook_action;
-			}
 			loop->linked_list_it = reinterpret_cast<std::uintptr_t>(hook->next);
 
 			if (loop->linked_list_it == 0x0) {
@@ -221,13 +208,8 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 			// But we're going to support it anywways, this will avoid infinite-loops
 			loop->original_call_over = true;
 		} else if (loop->post_loop_over == false) {
-			// Recall happened in a post-loop, save what they sent
+			// Recall happened in a post-loop, move to next iterator
 			auto hook = reinterpret_cast<DetourCapsule::LinkedList*>(loop->linked_list_it);
-			if (*hook->hook_action > (KHook::Action)loop->action) {
-				loop->fn_make_return = hook->fn_make_override_return;
-				loop->override_return_ptr = hook->override_return_ptr;
-				loop->action = (std::uintptr_t)*hook->hook_action;
-			}
 			loop->linked_list_it = reinterpret_cast<std::uintptr_t>(hook->prev);
 
 			if (loop->linked_list_it == 0x0) {
@@ -260,12 +242,13 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 
 		auto start = capsule->_start_callbacks;
 		if (start) {
-			// Set default return to original value
-			new_loop->fn_make_return = start->fn_make_original_return;
+			// First Hook can just handle all the returns and call original
+			new_loop->fn_make_return = start->fn_make_return;
 			new_loop->fn_make_call_original = start->fn_make_call_original;
-			new_loop->original_return_ptr = start->original_return_ptr;
-			// Default init override ptr but it won't be used
-			new_loop->override_return_ptr = start->override_return_ptr;
+			new_loop->original_return_ptr = 0;
+			new_loop->original_delete_operator = 0;
+			new_loop->override_return_ptr = 0;
+			new_loop->override_delete_operator = 0;
 			new_loop->fn_original_function_ptr = capsule->_original_function;
 		}
 
@@ -341,13 +324,82 @@ KHOOK_API void* GetCurrent() {
 	return g_current_hook.top();
 }
 
-KHOOK_API void* DoRecall(KHook::Action action, void** pointerToReturnValue) {
-	g_is_in_recall = true;
-	auto it = ((DetourCapsule::LinkedList*)g_saved_params.top()->linked_list_it);
-	if (action > *(it->hook_action)) {
-		*(it->hook_action) = action;
-		*pointerToReturnValue = reinterpret_cast<void*>(it->override_return_ptr);
+using init_copy_return = void (*)(void* assignee, void* value);
+using delete_return = void (*)(void* assignee);
+
+KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op, bool original) {
+	auto loop = g_saved_params.top();
+	if (original) {
+		// Save original value
+		if (loop->original_return_ptr != 0) {
+			// Value has already been saved, what the fuck
+			std::abort();
+		}
+		if (return_size != 0) {
+			auto new_return = new std::uint8_t[return_size];
+			loop->original_return_ptr = reinterpret_cast<std::uintptr_t>(new_return);
+			loop->original_delete_operator = reinterpret_cast<std::uintptr_t>(delete_op);
+
+			init_copy_return fn = reinterpret_cast<init_copy_return>(init_op);
+			(*fn)(new_return, ptr_to_return);
+		}
 	}
+	if (action > (KHook::Action)loop->action) {
+		loop->action = (std::uintptr_t)action;
+		// Looks like we already saved a return value before this
+		if (loop->override_return_ptr != 0) {
+			// De-init the memory
+			delete_return fn = reinterpret_cast<delete_return>(loop->override_delete_operator);
+			(*fn)(reinterpret_cast<void*>(loop->override_return_ptr));
+			// Free it
+			delete[] reinterpret_cast<std::uint8_t*>(loop->override_return_ptr);
+
+			if (return_size != 0) {
+				// What are you doing ?????
+				std::abort();
+			}
+		}
+		if (return_size != 0) {
+			auto new_return = new std::uint8_t[return_size];
+			loop->override_return_ptr = reinterpret_cast<std::uintptr_t>(new_return);
+			loop->override_delete_operator = reinterpret_cast<std::uintptr_t>(delete_op);
+
+			init_copy_return fn = reinterpret_cast<init_copy_return>(init_op);
+			(*fn)(new_return, ptr_to_return);
+		}
+	}
+}
+
+KHOOK_API void DestroyReturnValue() {
+	if (g_last_loop.recall_count != 0) {
+		g_saved_params.top()->recall_count--;
+	} else {
+		g_saved_params.pop();
+
+		// Free the return values if they exist, they should already be copied by that point
+		// Looks like we already saved a return value before this
+		if (g_last_loop.override_return_ptr != 0) {
+			// De-init the memory
+			delete_return fn = reinterpret_cast<delete_return>(g_last_loop.override_delete_operator);
+			(*fn)(reinterpret_cast<void*>(g_last_loop.override_return_ptr));
+			// Free it
+			delete[] reinterpret_cast<std::uint8_t*>(g_last_loop.override_return_ptr);
+		}
+
+		if (g_last_loop.original_return_ptr != 0) {
+			// De-init the memory
+			delete_return fn = reinterpret_cast<delete_return>(g_last_loop.original_delete_operator);
+			(*fn)(reinterpret_cast<void*>(g_last_loop.original_return_ptr));
+			// Free it
+			delete[] reinterpret_cast<std::uint8_t*>(g_last_loop.original_return_ptr);
+		}
+	}
+	RecursiveLockUnlockShared(&g_last_loop.capsule->_detour_mutex, false);
+}
+
+KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op) {
+	g_is_in_recall = true;
+	SaveReturnValue(action, ptr_to_return, return_size, init_op, delete_op, false);
 	return reinterpret_cast<void*>(g_saved_params.top()->capsule->_jit_func_ptr);
 }
 
@@ -355,32 +407,28 @@ KHOOK_API void* GetOriginalFunction() {
 	return reinterpret_cast<void*>(g_saved_params.top()->fn_original_function_ptr);
 }
 
-KHOOK_API void* GetOriginalValuePtr(bool pop) {
-	if (pop) {
-		if (g_recall_count != 0) {
-			g_saved_params.top()->recall_count--;
-		} else {
-			g_saved_params.pop();
-		}
-		RecursiveLockUnlockShared(g_hook_mutex, false);
-		//printf("Origi: %p\n", g_original_return);
-		return g_original_return;
-	} else {
-		return reinterpret_cast<void*>(g_saved_params.top()->original_return_ptr);
-	}
+KHOOK_API void* GetOriginalValuePtr() {
+	return reinterpret_cast<void*>(g_saved_params.top()->original_return_ptr);
 }
 
-KHOOK_API void* GetOverrideValuePtr(bool pop) {
+KHOOK_API void* GetOverrideValuePtr() {
+	return reinterpret_cast<void*>(g_saved_params.top()->override_return_ptr);
+}
+
+KHOOK_API void* GetCurrentValuePtr(bool pop) {
 	if (pop) {
-		if (g_recall_count != 0) {
-			g_saved_params.top()->recall_count--;
+		if (g_last_loop.action >= (std::uintptr_t)KHook::Action::Override) {
+			return reinterpret_cast<void*>(g_last_loop.override_return_ptr);
 		} else {
-			g_saved_params.pop();
+			return reinterpret_cast<void*>(g_last_loop.original_return_ptr);
 		}
-		RecursiveLockUnlockShared(g_hook_mutex, false);
-		return g_override_return;
 	} else {
-		return reinterpret_cast<void*>(g_saved_params.top()->override_return_ptr);
+		auto& loop = g_saved_params.top();
+		if (loop->action >= (std::uintptr_t)KHook::Action::Override) {
+			return reinterpret_cast<void*>(loop->override_return_ptr);
+		} else {
+			return reinterpret_cast<void*>(loop->original_return_ptr);
+		}
 	}
 }
 
@@ -661,11 +709,6 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 			// MAKE PRE/POST CALL
 			jit.push(r8);
 			jit.push(r8);
-			// Reset hook action value to ignore
-			if (offset_fn_callback == offsetof(LinkedList, fn_make_pre)) {
-				jit.mov(r8, rax(offsetof(LinkedList, hook_action)));
-				jit.mov(r8(), (std::int32_t)KHook::Action::Ignore);
-			}
 			push_current_hook(jit, rax(offsetof(LinkedList, hook_ptr)));
 			jit.pop(r8);
 			jit.pop(r8);
@@ -689,22 +732,6 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 			jit.test(rax, rax);
 			// Exit loop if a recall occurred, and that list was already iterated
 			jit.jnz(INT32_MAX); exit_loop_recall = jit.get_outputpos();
-
-			jit.mov(rax, rbp(offsetof(AsmLoopDetails, linked_list_it)));
-			jit.mov(r8, rax(offsetof(LinkedList, hook_action)));
-			jit.mov(r8, r8());
-			jit.l_and(r8, 0xF);
-			// If (current_hook->action > highestaction)
-			jit.cmp(r8, rbp(offsetof(AsmLoopDetails, action)));
-			jit.jle(INT32_MAX);
-			auto if_pre_action = jit.get_outputpos(); {
-				jit.mov(rbp(offsetof(AsmLoopDetails, action)), r8);
-				jit.mov(r8, rax(offsetof(LinkedList, fn_make_override_return)));
-				jit.mov(rbp(offsetof(AsmLoopDetails, fn_make_return)), r8);
-				jit.mov(r8, rax(offsetof(LinkedList, override_return_ptr)));
-				jit.mov(rbp(offsetof(AsmLoopDetails, override_return_ptr)), r8);
-			}
-			jit.rewrite<std::int32_t>(if_pre_action - sizeof(std::int32_t), jit.get_outputpos() - if_pre_action);
 			// Next item in the list
 			jit.mov(rax, rax(offset_next_it)); //  offsetof(LinkedList, next)
 			jit.mov(rbp(offsetof(AsmLoopDetails, linked_list_it)), rax);
@@ -1099,11 +1126,6 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 			// MAKE PRE/POST CALL
 			jit.sub(esp, sizeof(void*) * 3);
 			jit.push(ecx);
-			// Reset hook action value to ignore
-			if (offset_fn_callback == offsetof(LinkedList, fn_make_pre)) {
-				jit.mov(ecx, eax(offsetof(LinkedList, hook_action)));
-				jit.mov(ecx(), (std::int32_t)KHook::Action::Ignore);
-			}
 			push_current_hook(jit, eax(offsetof(LinkedList, hook_ptr)));
 			jit.pop(ecx);
 			jit.add(esp, sizeof(void*) * 3);
@@ -1130,22 +1152,6 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 			jit.test(eax, eax);
 			// Exit loop if a recall occurred, and that list was already iterated
 			jit.jnz(INT32_MAX); exit_loop_recall = jit.get_outputpos();
-
-			jit.mov(eax, ebp(offsetof(AsmLoopDetails, linked_list_it)));
-			jit.mov(ecx, eax(offsetof(LinkedList, hook_action)));
-			jit.mov(ecx, ecx());
-			jit.l_and(ecx, 0xF);
-			// If (current_hook->action > highestaction)
-			jit.cmp(ecx, ebp(offsetof(AsmLoopDetails, action)));
-			jit.jle(INT32_MAX);
-			auto if_pre_action = jit.get_outputpos(); {
-				jit.mov(ebp(offsetof(AsmLoopDetails, action)), ecx);
-				jit.mov(ecx, eax(offsetof(LinkedList, fn_make_override_return)));
-				jit.mov(ebp(offsetof(AsmLoopDetails, fn_make_return)), ecx);
-				jit.mov(ecx, eax(offsetof(LinkedList, override_return_ptr)));
-				jit.mov(ebp(offsetof(AsmLoopDetails, override_return_ptr)), ecx);
-			}
-			jit.rewrite<std::int32_t>(if_pre_action - sizeof(std::int32_t), jit.get_outputpos() - if_pre_action);
 			// Next item in the list
 			jit.mov(eax, eax(offset_next_it)); //  offsetof(LinkedList, next)
 			jit.mov(ebp(offsetof(AsmLoopDetails, linked_list_it)), eax);
@@ -1567,30 +1573,21 @@ KHOOK_API HookID_t SetupHook(
 	void* function,
 	void* hookPtr,
 	void* removedFunctionMFP,
-	::KHook::Action* hookAction,
-	void* overrideReturnPtr,
-	void* originalReturnPtr,
 	void* preMFP,
 	void* postMFP,
-	void* returnOverrideMFP,
-	void* returnOriginalMFP,
+	void* returnMFP,
 	void* callOriginalMFP,
 	bool async
 ) {
 	DetourCapsule::InsertHookDetails details;
 	details.hook_ptr = reinterpret_cast<std::uintptr_t>(hookPtr);
-	details.hook_action = hookAction;
 	details.hook_fn_remove = reinterpret_cast<std::uintptr_t>(removedFunctionMFP);
 
 	details.fn_make_pre = reinterpret_cast<std::uintptr_t>(preMFP);
 	details.fn_make_post = reinterpret_cast<std::uintptr_t>(postMFP);
 
-	details.fn_make_override_return = reinterpret_cast<std::uintptr_t>(returnOverrideMFP);
-	details.fn_make_original_return = reinterpret_cast<std::uintptr_t>(returnOriginalMFP);
+	details.fn_make_return = reinterpret_cast<std::uintptr_t>(returnMFP);
 	details.fn_make_call_original = reinterpret_cast<std::uintptr_t>(callOriginalMFP);
-
-	details.override_return_ptr = reinterpret_cast<std::uintptr_t>(overrideReturnPtr);
-	details.original_return_ptr = reinterpret_cast<std::uintptr_t>(originalReturnPtr);
 	//printf("Origi: %p\n", details.original_return_ptr);
 
 	g_hooks_detour_mutex.lock_shared();

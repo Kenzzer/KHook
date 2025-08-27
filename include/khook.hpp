@@ -69,22 +69,17 @@ public:
 	Hook();
 	virtual ~Hook() {
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			if (_ret) {
-				//delete _ret;
-			}
-			if (_original_return) {
-				//delete _original_return;
+			if (_fake_return) {
+				delete _fake_return;
 			}
 		}
 	}
 protected:
-	Action _action;
-	RETURN* _ret = nullptr;
-	RETURN* _original_return = nullptr;
+	RETURN* _fake_return = nullptr;
 };
 
 template<typename RETURN>
-inline Hook<RETURN>::Hook() : _ret(new RETURN), _original_return(new RETURN) {}
+inline Hook<RETURN>::Hook() : _fake_return(new RETURN) {}
 
 template<>
 inline Hook<void>::Hook() {}
@@ -146,17 +141,14 @@ inline __mfp_const__<C, R, A...> BuildMFP(const void* addr) {
  * @param function Address of the function to hook.
  * @param hookPtr Pointer of the class with which to call the provided MFPs.
  * @param removedFunctionMFP Member function pointer that will be called when the hook is removed. You should do memory clean up there.
- * @param hookAction Pointer to the hook action value.
  * @param preMFP (Member) function to call with the original this ptr (if any), before the hooked function is called.
  * @param postMFP (Member) function to call with the original this ptr (if any), after the hooked function is called.
- * @param returnOverrideMFP (Member) function to call with the original this ptr (if any), to return the overridden return value.
- * @param returnOriginalMFP (Member) function to call with the original this ptr (if any), to return the original return value.
- * @param callOriginalMFP (Member) function to call with the original this ptr (if any), to call the original function and store the return value if needed.
+ * @param returnMFP (Member) function to call with the original this ptr (if any), to make the final return value.
  * @param callOriginalMFP (Member) function to call with the original this ptr (if any), to call the original function and store the return value if needed.
  * @param async By default set to false. If set to true, the hook will be added synchronously. Beware if performed while the hooked function is processing this could deadlock.
  * @return The created hook id on success, INVALID_HOOK otherwise.
  */
-KHOOK_API HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctionMFP, ::KHook::Action* hookAction, void* overrideReturnPtr, void* originalReturnPtr, void* preMFP, void* postMFP, void* returnOverrideMFP, void* returnOriginalMFP, void* callOriginalMFP, bool async = false);
+KHOOK_API HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctionMFP, void* preMFP, void* postMFP, void* returnMFP, void* callOriginalMFP, bool async = false);
 
 /**
  * Removes a given hook. Beware if this is performed synchronously under a hook callback this could deadlock or crash.
@@ -185,76 +177,95 @@ KHOOK_API ::KHook::Action GetHookAction();
  *
  * @return The hooked function ptr. Behaviour is undefined if called outside hook callbacks.
  */
-KHOOK_API void* DoRecall(KHook::Action action, void** pointerToReturnValue);
+KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op);
+
+/**
+ * Thread local function, only to be called under KHook callbacks. Saves the return value for the current hook.
+ *
+ * @return
+ */
+KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op, bool original);
+
+template<typename TYPE>
+void init_operator(TYPE* assignee, TYPE* value) {
+	new (assignee) TYPE(*value);
+}
+
+template<typename TYPE>
+void delete_operator(TYPE* assignee) {
+	assignee->~TYPE();
+}
+
+template<typename RETURN>
+inline void* __internal__dorecall(const ::KHook::Return<RETURN> &ret) {
+	RETURN* return_ptr = nullptr;
+	void* init_op = nullptr;
+	void* delete_op = nullptr;
+	std::size_t size = 0;
+	if constexpr(!std::is_same<RETURN, void>::value) {	
+		return_ptr = const_cast<RETURN*>(&ret.ret);
+		init_op = reinterpret_cast<void*>(::KHook::init_operator<RETURN>);
+		delete_op = reinterpret_cast<void*>(::KHook::delete_operator<RETURN>);
+		size = sizeof(RETURN);
+	}
+
+	return ::KHook::DoRecall(ret.action, return_ptr, size, init_op, delete_op);
+}
+
+template<typename RETURN>
+inline void __internal__savereturnvalue(const ::KHook::Return<RETURN> &ret, bool original) {
+	RETURN* return_ptr = nullptr;
+	void* init_op = nullptr;
+	void* delete_op = nullptr;
+	std::size_t size = 0;
+	if constexpr(!std::is_same<RETURN, void>::value) {	
+		return_ptr = const_cast<RETURN*>(&ret.ret);
+		init_op = reinterpret_cast<void*>(::KHook::init_operator<RETURN>);
+		delete_op = reinterpret_cast<void*>(::KHook::delete_operator<RETURN>);
+		size = sizeof(RETURN);
+	}
+
+	::KHook::SaveReturnValue(ret.action, return_ptr, size, init_op, delete_op, original);
+}
 
 template<typename RETURN, typename ...ARGS>
 inline ::KHook::Return<RETURN> Recall(RETURN (*)(ARGS...), const ::KHook::Return<RETURN> &ret, ARGS... args) {
-	RETURN* retPtr = nullptr;
-	RETURN (*function)(ARGS...) = (decltype(function))::KHook::DoRecall(ret.action, reinterpret_cast<void**>(&retPtr));
-	if constexpr(!std::is_same<RETURN, void>::value) {
-		if (retPtr)
-			*retPtr = ret.ret;
-	}
+	RETURN (*function)(ARGS...) = (decltype(function))::KHook::__internal__dorecall(ret);
 	(*function)(args...);
 	return ret;
 }
 
 template<typename CLASS, typename RETURN, typename ...ARGS>
 inline ::KHook::Return<RETURN> Recall(RETURN (CLASS::*)(ARGS...), const ::KHook::Return<RETURN> &ret, CLASS* ptr, ARGS... args) {
-	RETURN* retPtr = nullptr;
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(::KHook::DoRecall(ret.action, reinterpret_cast<void**>(&retPtr)));
-	if constexpr(!std::is_same<RETURN, void>::value) {
-		if (retPtr)
-			*retPtr = ret.ret;
-	}
+	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(::KHook::__internal__dorecall(ret));
 	(ptr->*mfp)(args...);
 	return ret;
 }
 
 template<typename CLASS, typename RETURN, typename ...ARGS>
 inline ::KHook::Return<RETURN> Recall(RETURN (CLASS::*)(ARGS...), const ::KHook::Return<RETURN> &ret, const CLASS* ptr, ARGS... args) {
-	RETURN* retPtr = nullptr;
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>((const void*)::KHook::DoRecall(ret.action, reinterpret_cast<void**>(&retPtr)));
-	if constexpr(!std::is_same<RETURN, void>::value) {
-		if (retPtr)
-			*retPtr = ret.ret;
-	}
+	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>((const void*)::KHook::__internal__dorecall(ret));
 	(ptr->*mfp)(args...);
 	return ret;
 }
 
 template<typename RETURN, typename ...ARGS>
 inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, ARGS... args) {
-	RETURN* retPtr = nullptr;
-	RETURN (*function)(ARGS...) = (decltype(function))::KHook::DoRecall(ret.action, reinterpret_cast<void**>(&retPtr));
-	if constexpr(!std::is_same<RETURN, void>::value) {
-		if (retPtr)
-			*retPtr = ret.ret;
-	}
+	RETURN (*function)(ARGS...) = (decltype(function))::KHook::__internal__dorecall(ret);
 	(*function)(args...);
 	return ret;
 }
 
 template<typename CLASS, typename RETURN, typename ...ARGS>
 inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, CLASS* ptr, ARGS... args) {
-	RETURN* retPtr = nullptr;
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(::KHook::DoRecall(ret.action, reinterpret_cast<void**>(&retPtr)));
-	if constexpr(!std::is_same<RETURN, void>::value) {
-		if (retPtr)
-			*retPtr = ret.ret;
-	}
+	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(::KHook::__internal__dorecall(ret));
 	(ptr->*mfp)(args...);
 	return ret;
 }
 
 template<typename CLASS, typename RETURN, typename ...ARGS>
 inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, const CLASS* ptr, ARGS... args) {
-	RETURN* retPtr = nullptr;
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>((const void*)::KHook::DoRecall(ret.action, reinterpret_cast<void**>(&retPtr)));
-	if constexpr(!std::is_same<RETURN, void>::value) {
-		if (retPtr)
-			*retPtr = ret.ret;
-	}
+	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>((const void*)::KHook::__internal__dorecall(ret));
 	(ptr->*mfp)(args...);
 	return ret;
 }
@@ -271,15 +282,28 @@ KHOOK_API void* GetOriginalFunction();
  *
  * @return The original value pointer. Behaviour is undefined if called outside POST callbacks.
  */
-KHOOK_API void* GetOriginalValuePtr(bool pop = false);
+KHOOK_API void* GetOriginalValuePtr();
 
 /**
  * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the override return value.
  *
  * @return The override value pointer. Behaviour is undefined if called outside POST callbacks.
  */
-KHOOK_API void* GetOverrideValuePtr(bool pop = false);
+KHOOK_API void* GetOverrideValuePtr();
 
+/**
+ * Thread local function, only to be called under KHook callbacks. It returns the current pointer that KHook plans on using as return value.
+ *
+ * @return The override or original value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+KHOOK_API void* GetCurrentValuePtr(bool pop = false);
+
+/**
+ * Thread local function, only to be called when the hook callbacks loop is over, any earlier will cause undefined behaviour.
+ *
+ * @return
+ */
+KHOOK_API void DestroyReturnValue();
 
 /**
  * Returns the original function address, if the provided function address is detoured.
@@ -494,13 +518,9 @@ public:
 			(void*)address,
 			this,
 			ExtractMFP(&Self::_KHook_RemovedHook),
-			&this->_action,
-			this->_ret,
-			this->_original_return,
 			(void*)Self::_KHook_Callback_PRE, // preMFP
 			(void*)Self::_KHook_Callback_POST, // postMFP
-			(void*)Self::_KHook_MakeOverrideReturn, // returnOverrideMFP,
-			(void*)Self::_KHook_MakeOriginalReturn, // returnOriginalMFP
+			(void*)Self::_KHook_MakeReturn, // returnMFP,
 			(void*)Self::_KHook_MakeOriginalCall, // callOriginalMFP
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
@@ -556,12 +576,7 @@ protected:
 		}
 
 		Return<RETURN> action = (_context) ? (((EmptyClass*)_context)->*BuildMFP<EmptyClass, Return<RETURN>, ARGS...>(context_callback))(args...) : (*callback)(args...);
-		if (action.action > this->_action) {
-			this->_action = action.action;
-			if constexpr(!std::is_same<RETURN, void>::value) {	
-				*(this->_ret) = action.ret;
-			}
-		}
+		::KHook::__internal__savereturnvalue(action, false);
 	}
 
 	// Called by KHook
@@ -569,7 +584,7 @@ protected:
 		Self* real_this = (Self*)::KHook::GetCurrent();
 		real_this->_KHook_Callback_Fixed(false, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			return *real_this->_ret;
+			return *real_this->_fake_return;
 		}
 	}
 
@@ -578,29 +593,21 @@ protected:
 		Self* real_this = (Self*)::KHook::GetCurrent();
 		real_this->_KHook_Callback_Fixed(true, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			return *real_this->_ret;
+			return *real_this->_fake_return;
 		}
 	}
 
 	// Might be used by KHook
 	// Called if hook was selected as override hook
 	// It returns the final value the hook will use
-	static RETURN _KHook_MakeOverrideReturn(ARGS...) {
+	static RETURN _KHook_MakeReturn(ARGS...) {
 		if constexpr(std::is_same<RETURN, void>::value) {
-			::KHook::GetOverrideValuePtr(true);
+			::KHook::DestroyReturnValue();
 			return;
 		} else {
-			return *(RETURN*)::KHook::GetOverrideValuePtr(true);
-		}
-	}
-
-	// Called if the hook has no return override
-	static RETURN _KHook_MakeOriginalReturn(ARGS...) {
-		if constexpr(std::is_same<RETURN, void>::value) {
-			::KHook::GetOriginalValuePtr(true);
-			return;
-		} else {
-			return *(RETURN*)::KHook::GetOriginalValuePtr(true);
+			RETURN ret = *(RETURN*)::KHook::GetCurrentValuePtr(true);
+			::KHook::DestroyReturnValue();
+			return ret;
 		}
 	}
 
@@ -609,10 +616,11 @@ protected:
 		RETURN (*originalFunc)(ARGS...) = (decltype(originalFunc))::KHook::GetOriginalFunction();
 		if constexpr(std::is_same<RETURN, void>::value) {
 			(*originalFunc)(args...);
+			::KHook::__internal__savereturnvalue(KHook::Return<void>{ KHook::Action::Ignore }, true);
 		} else {
-			RETURN* ret = (RETURN*)::KHook::GetOriginalValuePtr();
-			*ret = (*originalFunc)(args...);
-			return *ret;
+			RETURN ret = (*originalFunc)(args...);
+			::KHook::__internal__savereturnvalue(KHook::Return<RETURN>{ KHook::Action::Ignore, ret }, true);
+			return ret;
 		}
 	}
 };
@@ -1063,13 +1071,9 @@ public:
 			(void*)address,
 			this,
 			ExtractMFP(&Self::_KHook_RemovedHook),
-			&this->_action,
-			this->_ret,
-			this->_original_return,
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
-			ExtractMFP(&Self::_KHook_MakeOverrideReturn), // returnOverrideMFP,
-			ExtractMFP(&Self::_KHook_MakeOriginalReturn), // returnOriginalMFP
+			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
@@ -1132,12 +1136,7 @@ protected:
 		}
 
 		Return<RETURN> action = (_context) ? (((EmptyClass*)_context)->*context_callback)(hooked_this, args...) : (*callback)(hooked_this, args...);
-		if (action.action > this->_action) {
-			this->_action = action.action;
-			if constexpr(!std::is_same<RETURN, void>::value) {
-				*(this->_ret) = action.ret;
-			}
-		}
+		::KHook::__internal__savereturnvalue(action, false);
 	}
 
 	// Called by KHook
@@ -1146,7 +1145,7 @@ protected:
 		Self* real_this = (Self*)::KHook::GetCurrent();
 		real_this->_KHook_Callback_Fixed(false, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			return *real_this->_ret;
+			return *real_this->_fake_return;
 		}
 	}
 
@@ -1156,29 +1155,21 @@ protected:
 		Self* real_this = (Self*)::KHook::GetCurrent();
 		real_this->_KHook_Callback_Fixed(true, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			return *real_this->_ret;
+			return *real_this->_fake_return;
 		}
 	}
 
 	// Might be used by KHook
 	// Called if hook was selected as override hook
 	// It returns the final value the hook will use
-	RETURN _KHook_MakeOverrideReturn(ARGS...) {
+	RETURN _KHook_MakeReturn(ARGS...) {
 		if constexpr(std::is_same<RETURN, void>::value) {
-			::KHook::GetOverrideValuePtr(true);
+			::KHook::DestroyReturnValue();
 			return;
 		} else {
-			return *(RETURN*)::KHook::GetOverrideValuePtr(true);
-		}
-	}
-
-	// Called if the hook has no return override
-	RETURN _KHook_MakeOriginalReturn(ARGS...) {
-		if constexpr(std::is_same<RETURN, void>::value) {
-			::KHook::GetOriginalValuePtr(true);
-			return;
-		} else {
-			return *(RETURN*)::KHook::GetOriginalValuePtr(true);
+			RETURN ret = *(RETURN*)::KHook::GetCurrentValuePtr(true);
+			::KHook::DestroyReturnValue();
+			return ret;
 		}
 	}
 
@@ -1187,10 +1178,11 @@ protected:
 		RETURN (EmptyClass::*ptr)(ARGS...) = BuildMFP<EmptyClass, RETURN, ARGS...>(::KHook::GetOriginalFunction());
 		if constexpr(std::is_same<RETURN, void>::value) {
 			(((EmptyClass*)this)->*ptr)(args...);
+			::KHook::__internal__savereturnvalue(KHook::Return<void>{ KHook::Action::Ignore }, true);
 		} else {
-			RETURN* ret = (RETURN*)::KHook::GetOriginalValuePtr();
-			*ret = (((EmptyClass*)this)->*ptr)(args...);
-			return *ret;
+			Return ret = (((EmptyClass*)this)->*ptr)(args...);
+			::KHook::__internal__savereturnvalue(KHook::Return<RETURN>{ KHook::Action::Ignore, ret }, true);
+			return ret;
 		}
 	}
 };
@@ -1228,7 +1220,7 @@ inline __mfp__<CLASS, RETURN, ARGS...> GetVtableFunction(CLASS* ptr, std::uint32
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
-class Virtual : protected Hook<RETURN> {
+class Virtual : public Hook<RETURN> {
 	static constexpr std::uint32_t INVALID_VTBL_INDEX = -1;
 	class EmptyClass {};
 public:
@@ -1572,13 +1564,9 @@ protected:
 			vtable[_vtbl_index],
 			this,
 			ExtractMFP(&Self::_KHook_RemovedHook),
-			&this->_action,
-			this->_ret,
-			this->_original_return,
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
-			ExtractMFP(&Self::_KHook_MakeOverrideReturn), // returnOverrideMFP,
-			ExtractMFP(&Self::_KHook_MakeOriginalReturn), // returnOriginalMFP
+			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
@@ -1606,12 +1594,7 @@ protected:
 		}
 
 		Return<RETURN> action = (_context) ? (((EmptyClass*)_context)->*context_callback)(hooked_this, args...) : (*callback)(hooked_this, args...);
-		if (action.action > this->_action) {
-			this->_action = action.action;
-			if constexpr(!std::is_same<RETURN, void>::value) {
-				*(this->_ret) = action.ret;
-			}
-		}
+		::KHook::__internal__savereturnvalue(action, false);
 	}
 
 	// Called by KHook
@@ -1620,7 +1603,7 @@ protected:
 		Self* real_this = (Self*)::KHook::GetCurrent();
 		real_this->_KHook_Callback_Fixed(false, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			return *real_this->_ret;
+			return *real_this->_fake_return;
 		}
 	}
 
@@ -1630,29 +1613,21 @@ protected:
 		Self* real_this = (Self*)::KHook::GetCurrent();
 		real_this->_KHook_Callback_Fixed(true, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
-			return *real_this->_ret;
+			return *real_this->_fake_return;
 		}
 	}
 
 	// Might be used by KHook
 	// Called if hook was selected as override hook
 	// It returns the final value the hook will use
-	RETURN _KHook_MakeOverrideReturn(ARGS...) {
+	RETURN _KHook_MakeReturn(ARGS...) {
 		if constexpr(std::is_same<RETURN, void>::value) {
-			::KHook::GetOverrideValuePtr(true);
+			::KHook::DestroyReturnValue();
 			return;
 		} else {
-			return *(RETURN*)::KHook::GetOverrideValuePtr(true);
-		}
-	}
-
-	// Called if the hook has no return override
-	RETURN _KHook_MakeOriginalReturn(ARGS...) {
-		if constexpr(std::is_same<RETURN, void>::value) {
-			::KHook::GetOriginalValuePtr(true);
-			return;
-		} else {
-			return *(RETURN*)::KHook::GetOriginalValuePtr(true);
+			RETURN ret = *(RETURN*)::KHook::GetCurrentValuePtr(true);
+			::KHook::DestroyReturnValue();
+			return ret;
 		}
 	}
 
@@ -1661,10 +1636,11 @@ protected:
 		RETURN (EmptyClass::*ptr)(ARGS...) = BuildMFP<EmptyClass, RETURN, ARGS...>(::KHook::GetOriginalFunction());
 		if constexpr(std::is_same<RETURN, void>::value) {
 			(((EmptyClass*)this)->*ptr)(args...);
+			::KHook::__internal__savereturnvalue(KHook::Return<void>{ KHook::Action::Ignore }, true);
 		} else {
-			RETURN* ret = (RETURN*)GetOriginalValuePtr();
-			*ret = (((EmptyClass*)this)->*ptr)(args...);
-			return *ret;
+			RETURN ret = (((EmptyClass*)this)->*ptr)(args...);
+			::KHook::__internal__savereturnvalue(KHook::Return<RETURN>{ KHook::Action::Ignore, ret }, true);
+			return ret;
 		}
 	}
 };
@@ -1803,21 +1779,24 @@ inline RETURN CallOriginal(const void* func, const CLASS* this_ptr, ARGS... args
 
 class IKHook {
 public:
-	virtual HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctionMFP, Action* hookAction, void* overrideReturnPtr, void* originalReturnPtr, void* preMFP, void* postMFP, void* returnOverrideMFP, void* returnOriginalMFP, void* callOriginalMFP, bool async = false) = 0;
+	virtual HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctionMFP, void* preMFP, void* postMFP, void* returnMFP, void* callOriginalMFP, bool async = false) = 0;
 	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
 	virtual void* GetCurrent() = 0;
 	virtual void* GetOriginalFunction() = 0;
-	virtual void* GetOriginalValuePtr(bool pop = false) = 0;
-	virtual void* GetOverrideValuePtr(bool pop = false) = 0;
+	virtual void* GetOriginalValuePtr() = 0;
+	virtual void* GetOverrideValuePtr() = 0;
+	virtual void* GetCurrentValuePtr(bool pop = false) = 0;
+	virtual void DestroyReturnValue() = 0;
 	virtual void* GetOriginal(void* function) = 0;
-	virtual void* DoRecall(KHook::Action action, void** pointerToReturnValue) = 0;
+	virtual void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op) = 0;
+	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op, bool original) = 0;
 	virtual KHook::Action GetHookAction() = 0;
 };
 #ifndef KHOOK_STANDALONE
 // KHOOK is exposed by something
 extern IKHook* __exported__khook;
 
-KHOOK_API HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctionMFP, Action* hookAction, void* overrideReturnPtr, void* originalReturnPtr, void* preMFP, void* postMFP, void* returnOverrideMFP, void* returnOriginalMFP, void* callOriginalMFP, bool async) {
+KHOOK_API HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctionMFP, void* preMFP, void* postMFP, void* returnMFP, void* callOriginalMFP, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
@@ -1828,7 +1807,7 @@ KHOOK_API HookID_t SetupHook(void* function, void* hookPtr, void* removedFunctio
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
 		return INVALID_HOOK;
 	}
-	return __exported__khook->SetupHook(function, hookPtr, removedFunctionMFP, hookAction, overrideReturnPtr, originalReturnPtr, preMFP, postMFP, returnOverrideMFP, returnOriginalMFP, callOriginalMFP, async);
+	return __exported__khook->SetupHook(function, hookPtr, removedFunctionMFP, preMFP, postMFP, returnMFP, callOriginalMFP, async);
 }
 
 KHOOK_API void RemoveHook(HookID_t id, bool async) {
@@ -1843,12 +1822,20 @@ KHOOK_API void* GetOriginalFunction() {
 	return __exported__khook->GetOriginalFunction();
 }
 
-KHOOK_API void* GetOriginalValuePtr(bool pop) {
-	return __exported__khook->GetOriginalValuePtr(pop);
+KHOOK_API void* GetOriginalValuePtr() {
+	return __exported__khook->GetOriginalValuePtr();
 }
 
-KHOOK_API void* GetOverrideValuePtr(bool pop) {
-	return __exported__khook->GetOverrideValuePtr(pop);
+KHOOK_API void* GetOverrideValuePtr() {
+	return __exported__khook->GetOverrideValuePtr();
+}
+
+KHOOK_API void* GetCurrentValuePtr(bool pop) {
+	return __exported__khook->GetCurrentValuePtr(pop);
+}
+
+KHOOK_API void DestroyReturnValue() {
+	return __exported__khook->DestroyReturnValue();
 }
 
 KHOOK_API void* GetOriginal(void* function) {
@@ -1859,8 +1846,12 @@ KHOOK_API KHook::Action GetHookAction() {
 	return __exported__khook->GetHookAction();
 }
 
-KHOOK_API void* DoRecall(KHook::Action action, void** pointerToReturnValue) {
-	return __exported__khook->DoRecall(action, pointerToReturnValue);
+KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op) {
+	return __exported__khook->DoRecall(action, ptr_to_return, return_size, init_op, delete_op);
+}
+
+KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op, bool original) {
+	return __exported__khook->SaveReturnValue(action, ptr_to_return, return_size, init_op, delete_op, original);
 }
 
 #endif

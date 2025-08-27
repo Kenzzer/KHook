@@ -58,15 +58,13 @@ namespace KHook {
 
 		struct InsertHookDetails {
 			std::uintptr_t hook_ptr;
-			KHook::Action* hook_action;
 			std::uintptr_t hook_fn_remove;
 
 			std::uintptr_t fn_make_pre;
 			std::uintptr_t fn_make_post;
 
 			std::uintptr_t fn_make_call_original;
-			std::uintptr_t fn_make_original_return;
-			std::uintptr_t fn_make_override_return;
+			std::uintptr_t fn_make_return;
 
 			std::uintptr_t original_return_ptr;
 			std::uintptr_t override_return_ptr;
@@ -100,35 +98,25 @@ namespace KHook {
 
 			void CopyDetails(const InsertHookDetails& details) {
 				hook_ptr = details.hook_ptr;
-				hook_action = details.hook_action;
 				hook_fn_remove = details.hook_fn_remove;
 
 				fn_make_pre = details.fn_make_pre;
 				fn_make_post = details.fn_make_post;
 
 				fn_make_call_original = details.fn_make_call_original;
-				fn_make_original_return = details.fn_make_original_return;
-				fn_make_override_return = details.fn_make_override_return;
-
-				original_return_ptr = details.original_return_ptr;
-				override_return_ptr = details.override_return_ptr;
+				fn_make_return = details.fn_make_return;
 			}
 
 			LinkedList* prev = nullptr;
 			LinkedList* next = nullptr;
 			std::uintptr_t hook_ptr;
-			KHook::Action* hook_action;
 			std::uintptr_t hook_fn_remove;
 
 			std::uintptr_t fn_make_pre;
 			std::uintptr_t fn_make_post;
 
 			std::uintptr_t fn_make_call_original;
-			std::uintptr_t fn_make_original_return;
-			std::uintptr_t fn_make_override_return;
-
-			std::uintptr_t original_return_ptr;
-			std::uintptr_t override_return_ptr;
+			std::uintptr_t fn_make_return;
 		};
 		// Always safe to read
 		bool _in_deletion;
