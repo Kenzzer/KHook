@@ -166,13 +166,6 @@ KHOOK_API void RemoveHook(HookID_t id, bool async = false);
 KHOOK_API void* GetCurrent();
 
 /**
- * Thread local function, only to be called under KHook callbacks. It returns the highest Action received.
- *
- * @return The highest Action value set.
- */
-KHOOK_API ::KHook::Action GetHookAction();
-
-/**
  * Thread local function, only to be called under KHook callbacks. If called it allow for a recall of hooked function with new params.
  *
  * @return The hooked function ptr. Behaviour is undefined if called outside hook callbacks.
@@ -1180,7 +1173,7 @@ protected:
 			(((EmptyClass*)this)->*ptr)(args...);
 			::KHook::__internal__savereturnvalue(KHook::Return<void>{ KHook::Action::Ignore }, true);
 		} else {
-			Return ret = (((EmptyClass*)this)->*ptr)(args...);
+			RETURN ret = (((EmptyClass*)this)->*ptr)(args...);
 			::KHook::__internal__savereturnvalue(KHook::Return<RETURN>{ KHook::Action::Ignore, ret }, true);
 			return ret;
 		}
@@ -1790,7 +1783,6 @@ public:
 	virtual void* GetOriginal(void* function) = 0;
 	virtual void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op) = 0;
 	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op, bool original) = 0;
-	virtual KHook::Action GetHookAction() = 0;
 };
 #ifndef KHOOK_STANDALONE
 // KHOOK is exposed by something
@@ -1840,10 +1832,6 @@ KHOOK_API void DestroyReturnValue() {
 
 KHOOK_API void* GetOriginal(void* function) {
 	return __exported__khook->GetOriginal(function);
-}
-
-KHOOK_API KHook::Action GetHookAction() {
-	return __exported__khook->GetHookAction();
 }
 
 KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* delete_op) {

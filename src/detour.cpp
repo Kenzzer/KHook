@@ -732,6 +732,7 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 			jit.test(rax, rax);
 			// Exit loop if a recall occurred, and that list was already iterated
 			jit.jnz(INT32_MAX); exit_loop_recall = jit.get_outputpos();
+			jit.mov(rax, rbp(offsetof(AsmLoopDetails, linked_list_it)));
 			// Next item in the list
 			jit.mov(rax, rax(offset_next_it)); //  offsetof(LinkedList, next)
 			jit.mov(rbp(offsetof(AsmLoopDetails, linked_list_it)), rax);
@@ -1152,6 +1153,7 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 			jit.test(eax, eax);
 			// Exit loop if a recall occurred, and that list was already iterated
 			jit.jnz(INT32_MAX); exit_loop_recall = jit.get_outputpos();
+			jit.mov(eax, ebp(offsetof(AsmLoopDetails, linked_list_it)));
 			// Next item in the list
 			jit.mov(eax, eax(offset_next_it)); //  offsetof(LinkedList, next)
 			jit.mov(ebp(offsetof(AsmLoopDetails, linked_list_it)), eax);
