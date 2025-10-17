@@ -1768,7 +1768,7 @@ KHOOK_API void Shutdown(
 	g_DeleteThread.join();
 }
 
-KHOOK_API void* GetOriginal(void* function) {
+KHOOK_API void* FindOriginal(void* function) {
 	std::shared_lock guard(g_hooks_detour_mutex);
 	auto it = g_hooks_detour.find(function);
 	if (it != g_hooks_detour.end()) {
@@ -1776,6 +1776,16 @@ KHOOK_API void* GetOriginal(void* function) {
 	}
 	// No associated detours, so this is already original function
 	return function;
+}
+
+KHOOK_API void* FindOriginalVirtual(void** vtable, int index) {
+	std::shared_lock guard(g_hooks_detour_mutex);
+	auto it = g_hooks_detour.find((vtable + index));
+	if (it != g_hooks_detour.end()) {
+		return (*it).second->GetOriginal();
+	}
+	// No associated detours, so this is already original function
+	return vtable[index];
 }
 
 }
