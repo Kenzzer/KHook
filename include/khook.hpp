@@ -151,6 +151,22 @@ inline __mfp_const__<C, R, A...> BuildMFP(const void* addr) {
 KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false);
 
 /**
+ * Creates a hook around the given function retrieved from a vtable.
+ *
+ * @param vtable Vtable pointer to retrieve the function from.
+ * @param index Index into the vtable to retrieve the function from.
+ * @param context Context pointer that will be provided under the hook callbacks.
+ * @param removed_function Member function pointer that will be called when the hook is removed. You should do memory clean up there.
+ * @param pre Function to call with the original this ptr (if any), before the hooked function is called.
+ * @param post Function to call with the original this ptr (if any), after the hooked function is called.
+ * @param make_return Function to call with the original this ptr (if any), to make the final return value.
+ * @param make_call_original Function to call with the original this ptr (if any), to call the original function and store the return value if needed.
+ * @param async By default set to false. If set to true, the hook will be added synchronously. Beware if performed while the hooked function is processing this could deadlock.
+ * @return The created hook id on success, INVALID_HOOK otherwise.
+ */
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false);
+
+/**
  * Removes a given hook. Beware if this is performed synchronously under a hook callback this could deadlock or crash.
  * 
  * @param id The hook id.
@@ -1553,8 +1569,9 @@ protected:
 			}
 		}
 
-		auto id = ::KHook::SetupHook(
-			vtable[_vtbl_index],
+		auto id = ::KHook::SetupVirtualHook(
+			vtable,
+			_vtbl_index,
 			this,
 			ExtractMFP(&Self::_KHook_RemovedHook),
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
@@ -1773,6 +1790,7 @@ inline RETURN CallOriginal(const void* func, const CLASS* this_ptr, ARGS... args
 class IKHook {
 public:
 	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
+	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
 	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
 	virtual void* GetContext() = 0;
 	virtual void* GetOriginalFunction() = 0;
@@ -1800,6 +1818,20 @@ KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_functi
 		return INVALID_HOOK;
 	}
 	return __exported__khook->SetupHook(function, context, removed_function, pre, post, make_return, make_call_original, async);
+}
+
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) {
+	// For some hooks this is too early
+	if (__exported__khook == nullptr) {
+		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		std::cout << "!!!!!!!!!!!!!!! WARNING YOU HAVE SETUP YOUR HOOK TOO EARLY, IT WONT WORK !!!!!!!!!!!!!!!\n";
+		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		std::cerr << "!!!!!!!!!!!!!!! WARNING YOU HAVE SETUP YOUR HOOK TOO EARLY, IT WONT WORK !!!!!!!!!!!!!!!\n";
+		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		return INVALID_HOOK;
+	}
+	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, async);
 }
 
 KHOOK_API void RemoveHook(HookID_t id, bool async) {

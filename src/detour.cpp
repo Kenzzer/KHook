@@ -494,7 +494,7 @@ void copy_stack(DetourCapsule::AsmJit& jit, std::int32_t offset, std::int32_t st
 #endif
 }
 
-DetourCapsule::DetourCapsule(void* detour_address) :
+DetourCapsule::DetourCapsule() :
 	_in_deletion(false),
 	_start_callbacks(nullptr),
 	_end_callbacks(nullptr),
@@ -1383,12 +1383,6 @@ DetourCapsule::DetourCapsule(void* detour_address) :
 	_jit.SetRE();
 	void* bridge = _jit;
 	_jit_func_ptr = reinterpret_cast<std::uintptr_t>(bridge);
-
-	auto result = safetyhook::InlineHook::create(detour_address, bridge);
-	if (result) {
-		_safetyhook = std::move(result.value());
-		_original_function = reinterpret_cast<std::uintptr_t>(_safetyhook.original<void*>());
-	}
 }
 
 class EmptyClass {};
@@ -1578,68 +1572,68 @@ std::thread g_DeleteThread([]{
 	}
 });
 
-KHOOK_API HookID_t SetupHook(
-	void* function,
-	void* hookPtr,
-	void* removedFunctionMFP,
-	void* preMFP,
-	void* postMFP,
-	void* returnMFP,
-	void* callOriginalMFP,
-	bool async
+template<typename... Args>
+HookID_t __Setup__Hook(
+	void* unique_identifier,
+	void* context,
+	void* remove_fn,
+	void* pre,
+	void* post,
+	void* make_return,
+	void* make_call_original,
+	bool async,
+	bool (DetourCapsule::*setup_hook)(Args...),
+	Args... args
 ) {
 	DetourCapsule::InsertHookDetails details;
-	details.hook_ptr = reinterpret_cast<std::uintptr_t>(hookPtr);
-	details.hook_fn_remove = reinterpret_cast<std::uintptr_t>(removedFunctionMFP);
+	details.hook_ptr = reinterpret_cast<std::uintptr_t>(context);
+	details.hook_fn_remove = reinterpret_cast<std::uintptr_t>(remove_fn);
 
-	details.fn_make_pre = reinterpret_cast<std::uintptr_t>(preMFP);
-	details.fn_make_post = reinterpret_cast<std::uintptr_t>(postMFP);
+	details.fn_make_pre = reinterpret_cast<std::uintptr_t>(pre);
+	details.fn_make_post = reinterpret_cast<std::uintptr_t>(post);
 
-	details.fn_make_return = reinterpret_cast<std::uintptr_t>(returnMFP);
-	details.fn_make_call_original = reinterpret_cast<std::uintptr_t>(callOriginalMFP);
-	//printf("Origi: %p\n", details.original_return_ptr);
+	details.fn_make_return = reinterpret_cast<std::uintptr_t>(make_return);
+	details.fn_make_call_original = reinterpret_cast<std::uintptr_t>(make_call_original);
 
 	g_hooks_detour_mutex.lock_shared();
-	auto it = g_hooks_detour.find(function);
+	auto it = g_hooks_detour.find(unique_identifier);
 	if (it == g_hooks_detour.end()) {
 		g_hooks_detour_mutex.unlock_shared();
-
-		//printf("g_hooks_detour_mutex -- try lock\n");
 		g_hooks_detour_mutex.lock();
-		//printf("g_hooks_detour_mutex -- lock\n");
-		auto insert = g_hooks_detour.insert_or_assign(function, std::make_unique<DetourCapsule>(function));
+
+		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>());
+		if (insert.second) {
+			auto detour = insert.first->second.get();
+			if ((detour->*setup_hook)(std::forward<Args>(args)...)) {
+				g_hooks_detour.erase(unique_identifier);
+				insert.second = false;
+			}
+		}
 		g_hooks_detour_mutex.unlock();
-		//printf("g_hooks_detour_mutex -- unlock\n");
 
 		if (!insert.second) {
-			//printf("setup failed\n");
 			return INVALID_HOOK;
 		}
 		// If we've just inserted that new detour
 		// Sync insert the hook as well
 		async = false;
-		//printf("new hook insert!\n");
 	} else {
 		g_hooks_detour_mutex.unlock_shared();
 	}
 
-	//printf("insert hook %d\n", async);
 	g_hooks_detour_mutex.lock_shared();
-	it = g_hooks_detour.find(function);
+	it = g_hooks_detour.find(unique_identifier);
 	if (it != g_hooks_detour.end()) {
 
 		HookID_t id = 0;
 		{
 			std::lock_guard generator(g_hook_id_mutex);
-			//printf("lock hook id\n");
 			id = g_lastest_hook_id++;
 		}
 
 		// Associate hook with detour
 		{
-			//printf("trylock associated hook\n");
 			std::lock_guard associated_guard(g_associated_hooks_mutex);
-			//printf("lock associated hook\n");
 			g_associated_hooks[id] = it->second.get();
 		}
 
@@ -1656,13 +1650,61 @@ KHOOK_API HookID_t SetupHook(
 		}
 
 		g_hooks_detour_mutex.unlock_shared();
-		//printf("setup success\n");
 		return id;
 	}
 
 	g_hooks_detour_mutex.unlock_shared();
-	//printf("setup full failure\n");
 	return INVALID_HOOK;
+}
+
+KHOOK_API HookID_t SetupHook(
+	void* function,
+	void* context,
+	void* remove_fn,
+	void* pre,
+	void* post,
+	void* make_return,
+	void* make_call_original,
+	bool async
+) {
+	return __Setup__Hook(
+		function, // The function ptr will be used as the identifier
+		context,
+		remove_fn, 
+		pre,
+		post,
+		make_return,
+		make_call_original,
+		async,
+		&DetourCapsule::SetupAddress,
+		function
+	);
+}
+
+KHOOK_API HookID_t SetupVirtualHook(
+	void** vtable,
+	int index,
+	void* context,
+	void* remove_fn,
+	void* pre,
+	void* post,
+	void* make_return,
+	void* make_call_original,
+	bool async
+) {
+	return __Setup__Hook(
+		vtable + index, // The vtable entry address will be used as identifier
+		context,
+		remove_fn, 
+		pre,
+		post,
+		make_return,
+		make_call_original,
+		async,
+		&DetourCapsule::SetupVirtual,
+		vtable,
+		index
+	);
 }
 
 KHOOK_API void RemoveHook(
