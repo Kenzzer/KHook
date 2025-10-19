@@ -1604,7 +1604,8 @@ HookID_t __Setup__Hook(
 		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>());
 		if (insert.second) {
 			auto detour = insert.first->second.get();
-			if ((detour->*setup_hook)(std::forward<Args>(args)...)) {
+			// Hook setup failed, so early abort...
+			if ((detour->*setup_hook)(std::forward<Args>(args)...) == false) {
 				g_hooks_detour.erase(unique_identifier);
 				insert.second = false;
 			}

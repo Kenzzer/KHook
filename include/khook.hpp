@@ -1807,7 +1807,7 @@ public:
 // KHOOK is exposed by something
 extern IKHook* __exported__khook;
 
-KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) {
+KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
@@ -1821,7 +1821,7 @@ KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_functi
 	return __exported__khook->SetupHook(function, context, removed_function, pre, post, make_return, make_call_original, async);
 }
 
-KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) {
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
