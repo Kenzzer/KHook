@@ -53,7 +53,7 @@ namespace KHook {
 		using AsmJit = Asm::x86_Jit;
 #endif
 
-		DetourCapsule(void* detour_address);
+		DetourCapsule();
 		~DetourCapsule();
 
 		struct InsertHookDetails {
@@ -72,9 +72,32 @@ namespace KHook {
 
 		bool InsertHook(HookID_t, const InsertHookDetails&);
 		void RemoveHook(HookID_t);
+
 		void* GetOriginal() {
 			std::shared_lock lock(_detour_mutex);
 			return reinterpret_cast<void*>(_original_function);
+		}
+
+		bool SetupAddress(void* detour_address) {
+			auto result = safetyhook::InlineHook::create(detour_address, _jit_func_ptr);
+			if (result) {
+				// Successfully detour'd the function
+				_safetyhook = std::move(result.value());
+				_original_function = reinterpret_cast<std::uintptr_t>(_safetyhook.original<void*>());
+				return true;
+			}
+			// Safetyhook setup failed
+			return false;
+		}
+
+		bool SetupVirtual(void** vtable, int index) {
+			auto entry = vtable + index;
+			KHook::Memory::SetAccess(entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ | KHook::Memory::Flags::WRITE);
+			_original_function = reinterpret_cast<std::uintptr_t>(*entry);
+			*entry = reinterpret_cast<void*>(_jit_func_ptr);
+			KHook::Memory::SetAccess(entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ);
+			// There's no way to predict whether or not the above code will crash, just always return true
+			return true;
 		}
 
 	public:

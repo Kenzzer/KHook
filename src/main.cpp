@@ -1,4 +1,4 @@
-/*#include <iostream>
+#include <iostream>
 
 #include "detour.hpp"
 #include "khook.hpp"
@@ -76,8 +76,8 @@ int main() {
 
     KHook::Shutdown();
     return 0;
-}*/
-
+}
+/*
 #include <iostream>
 #include <cassert>
 #include <thread>
@@ -189,4 +189,4 @@ int main() {
     KHook::Shutdown();
 
     return 0;
-}
+}*/

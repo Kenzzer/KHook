@@ -151,6 +151,22 @@ inline __mfp_const__<C, R, A...> BuildMFP(const void* addr) {
 KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false);
 
 /**
+ * Creates a hook around the given function retrieved from a vtable.
+ *
+ * @param vtable Vtable pointer to retrieve the function from.
+ * @param index Index into the vtable to retrieve the function from.
+ * @param context Context pointer that will be provided under the hook callbacks.
+ * @param removed_function Member function pointer that will be called when the hook is removed. You should do memory clean up there.
+ * @param pre Function to call with the original this ptr (if any), before the hooked function is called.
+ * @param post Function to call with the original this ptr (if any), after the hooked function is called.
+ * @param make_return Function to call with the original this ptr (if any), to make the final return value.
+ * @param make_call_original Function to call with the original this ptr (if any), to call the original function and store the return value if needed.
+ * @param async By default set to false. If set to true, the hook will be added synchronously. Beware if performed while the hooked function is processing this could deadlock.
+ * @return The created hook id on success, INVALID_HOOK otherwise.
+ */
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false);
+
+/**
  * Removes a given hook. Beware if this is performed synchronously under a hook callback this could deadlock or crash.
  * 
  * @param id The hook id.
@@ -304,7 +320,17 @@ KHOOK_API void DestroyReturnValue();
  *
  * @return Returns a different pointer than the original if there's an associated detour.
  */
-KHOOK_API void* GetOriginal(void* function);
+KHOOK_API void* FindOriginal(void* function);
+
+/**
+ * Returns the original virtual function address, if the provided vtable entry is detoured.
+ * Useful to bypass hooks and infinite loops.
+ *
+ * @param vtable VTable ptr to parse.
+ * @param index Entry index in the vtable.
+ * @return Returns a different pointer than the one currently held by the vtable if there's an associated detour.
+ */
+KHOOK_API void* FindOriginalVirtual(void** vtable, int index);
 
 /**
  * Destroys every registered hooks.
@@ -533,7 +559,7 @@ public:
 	}
 
 	RETURN CallOriginal(ARGS... args) {
-		RETURN (*function)(ARGS...) = (decltype(function))::KHook::GetOriginal((void*)_hooked_addr);
+		RETURN (*function)(ARGS...) = (decltype(function))::KHook::FindOriginal((void*)_hooked_addr);
 		return (*function)(args...);
 	}
 protected:
@@ -1090,9 +1116,8 @@ public:
 	}
 
 	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
-		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>((void*)_hooked_addr);
-		auto original_func = KHook::GetOriginal(KHook::ExtractMFP(mfp));
-		mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
+		auto original_func = KHook::FindOriginal((void*)_hooked_addr);
+		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
 		return (this_ptr->*mfp)(args...);
 	}
 protected:
@@ -1486,9 +1511,8 @@ public:
 	}
 
 	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
-		auto mfp = KHook::GetVtableFunction<CLASS, RETURN, ARGS...>(this_ptr, _vtbl_index);
-		auto original_func = KHook::GetOriginal(KHook::ExtractMFP(mfp));
-		mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
+		auto original_func = KHook::FindOriginalVirtual(*(void***)this_ptr, _vtbl_index);
+		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
 		return (this_ptr->*mfp)(args...);
 	}
 
@@ -1553,8 +1577,9 @@ protected:
 			}
 		}
 
-		auto id = ::KHook::SetupHook(
-			vtable[_vtbl_index],
+		auto id = ::KHook::SetupVirtualHook(
+			vtable,
+			_vtbl_index,
 			this,
 			ExtractMFP(&Self::_KHook_RemovedHook),
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
@@ -1722,50 +1747,42 @@ inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...) const) {
 
 template<typename CLASS, typename RETURN, typename... ARGS>
 inline RETURN CallOriginal(RETURN (CLASS::*function)(ARGS...), CLASS* this_ptr, ARGS... args) {
-	auto vtbl = ::KHook::GetVtableIndex(function);
+	auto vtbl_index = ::KHook::GetVtableIndex(function);
 	void* func = nullptr;
-	if (vtbl != -1)
-	{
-		func = (*(void***)this_ptr)[vtbl];
+	if (vtbl_index != -1) {
+		func = ::KHook::FindOriginalVirtual(*(void***)this_ptr, vtbl_index);
 	}
-	else
-	{
-		func = ::KHook::ExtractMFP(function);
+	else {
+		func = ::KHook::FindOriginal(::KHook::ExtractMFP(function));
 	}
-
-	func = ::KHook::GetOriginal(func);
 	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
 	return (this_ptr->*mfp)(args...);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
 inline RETURN CallOriginal(RETURN (CLASS::*function)(ARGS...) const, const CLASS* this_ptr, ARGS... args) {
-	auto vtbl = ::KHook::GetVtableIndex(function);
+	auto vtbl_index = ::KHook::GetVtableIndex(function);
 	const void* func = nullptr;
-	if (vtbl != -1)
-	{
-		func = (*(const void***)this_ptr)[vtbl];
+	if (vtbl_index != -1) {
+		func = ::KHook::FindOriginalVirtual(*(void***)this_ptr, vtbl_index);
 	}
-	else
-	{
-		func = ::KHook::ExtractMFP(function);
+	else {
+		func = ::KHook::FindOriginal(::KHook::ExtractMFP(function));
 	}
-
-	func = (const void*)::KHook::GetOriginal((void*)func);
 	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
 	return (this_ptr->*mfp)(args...);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
 inline RETURN CallOriginal(void* func, CLASS* this_ptr, ARGS... args) {
-	func = ::KHook::GetOriginal(func);
+	func = ::KHook::FindOriginal(func);
 	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
 	return (this_ptr->*mfp)(args...);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
 inline RETURN CallOriginal(const void* func, const CLASS* this_ptr, ARGS... args) {
-	func = (const void*)::KHook::GetOriginal((void*)func);
+	func = (const void*)::KHook::FindOriginal((void*)func);
 	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
 	return (this_ptr->*mfp)(args...);
 }
@@ -1773,6 +1790,7 @@ inline RETURN CallOriginal(const void* func, const CLASS* this_ptr, ARGS... args
 class IKHook {
 public:
 	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
+	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
 	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
 	virtual void* GetContext() = 0;
 	virtual void* GetOriginalFunction() = 0;
@@ -1780,7 +1798,8 @@ public:
 	virtual void* GetOverrideValuePtr() = 0;
 	virtual void* GetCurrentValuePtr(bool pop = false) = 0;
 	virtual void DestroyReturnValue() = 0;
-	virtual void* GetOriginal(void* function) = 0;
+	virtual void* FindOriginal(void* function) = 0;
+	virtual void* FindOriginalVirtual(void** vtable, int index) = 0;
 	virtual void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op) = 0;
 	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) = 0;
 };
@@ -1788,7 +1807,7 @@ public:
 // KHOOK is exposed by something
 extern IKHook* __exported__khook;
 
-KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) {
+KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
@@ -1800,6 +1819,20 @@ KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_functi
 		return INVALID_HOOK;
 	}
 	return __exported__khook->SetupHook(function, context, removed_function, pre, post, make_return, make_call_original, async);
+}
+
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
+	// For some hooks this is too early
+	if (__exported__khook == nullptr) {
+		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		std::cout << "!!!!!!!!!!!!!!! WARNING YOU HAVE SETUP YOUR HOOK TOO EARLY, IT WONT WORK !!!!!!!!!!!!!!!\n";
+		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		std::cerr << "!!!!!!!!!!!!!!! WARNING YOU HAVE SETUP YOUR HOOK TOO EARLY, IT WONT WORK !!!!!!!!!!!!!!!\n";
+		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
+		return INVALID_HOOK;
+	}
+	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, async);
 }
 
 KHOOK_API void RemoveHook(HookID_t id, bool async) {
@@ -1830,8 +1863,12 @@ KHOOK_API void DestroyReturnValue() {
 	return __exported__khook->DestroyReturnValue();
 }
 
-KHOOK_API void* GetOriginal(void* function) {
-	return __exported__khook->GetOriginal(function);
+KHOOK_API void* FindOriginal(void* function) {
+	return __exported__khook->FindOriginal(function);
+}
+
+KHOOK_API void* FindOriginalVirtual(void** vtable, int index) {
+	return __exported__khook->FindOriginalVirtual(vtable, index);
 }
 
 KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op) {
