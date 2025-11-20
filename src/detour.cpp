@@ -1470,12 +1470,27 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 	auto it = _callbacks.find(id);
 	if (it != _callbacks.end()) {
 		auto hook = it->second.get();
+
+		auto linked_it = _start_callbacks;
+		while (linked_it != hook) {
+			 linked_it = linked_it->next;
+		}
+		
+		if (linked_it->prev) {
+			linked_it->prev->next = linked_it->next;
+		}
+		if (linked_it->next) {
+			linked_it->next->prev = linked_it->prev;
+		}
+		
 		if (hook == _start_callbacks) {
 			_start_callbacks = _start_callbacks->next;
 		}
 		if (hook == _end_callbacks) {
 			_end_callbacks = _end_callbacks->prev;
 		}
+		
+		_callbacks.erase(it);
 
 		auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook->hook_fn_remove));
 		(((EmptyClass*)(hook->hook_ptr))->*mfp)(id);
