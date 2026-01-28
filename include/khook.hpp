@@ -518,7 +518,20 @@ public:
 		}
 	}
 
-	void Configure(const void* address) {
+	inline void Configure(RETURN (*function)(ARGS...)) {
+		return _Configure(reinterpret_cast<const void*>(function));
+	}
+
+	RETURN CallOriginal(ARGS... args) {
+		RETURN (*function)(ARGS...) = (decltype(function))::KHook::FindOriginal((void*)_hooked_addr);
+		return (*function)(args...);
+	}
+protected:
+	inline void _Configure(void* address) {
+		return _Configure(reinterpret_cast<const void*>(address));
+	}
+
+	void _Configure(const void* address) {
 		if (address == nullptr || _in_deletion) {
 			return;
 		}
@@ -550,19 +563,6 @@ public:
 		}
 	}
 
-	inline void Configure(void* address) {
-		return Configure(reinterpret_cast<const void*>(address));
-	}
-
-	inline void Configure(RETURN (*function)(ARGS...)) {
-		return Configure(reinterpret_cast<const void*>(function));
-	}
-
-	RETURN CallOriginal(ARGS... args) {
-		RETURN (*function)(ARGS...) = (decltype(function))::KHook::FindOriginal((void*)_hooked_addr);
-		return (*function)(args...);
-	}
-protected:
 	// Various filters to make MemberHook class useful
 	fnCallback _pre_callback;
 	fnCallback _post_callback;
@@ -1071,7 +1071,24 @@ public:
 		}
 	}
 
-	void Configure(const void* address) {
+	inline void Configure(RETURN (CLASS::*function)(ARGS...)) {
+		return _Configure(::KHook::ExtractMFP(function));
+	}
+
+	inline void Configure(RETURN (CLASS::*function)(ARGS...) const) {
+		return _Configure(::KHook::ExtractMFP(function));
+	}
+
+	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
+		auto original_func = KHook::FindOriginal((void*)_hooked_addr);
+		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
+		return (this_ptr->*mfp)(args...);
+	}
+protected:
+	inline void _Configure(void* address) {
+		return _Configure(reinterpret_cast<const void*>(address));
+	}
+	void _Configure(const void* address) {
 		if (address == nullptr || _in_deletion) {
 			return;
 		}
@@ -1103,24 +1120,6 @@ public:
 		}
 	}
 
-	inline void Configure(void* address) {
-		return Configure(reinterpret_cast<const void*>(address));
-	}
-
-	inline void Configure(RETURN (CLASS::*function)(ARGS...)) {
-		return Configure(ExtractMFP(function));
-	}
-
-	inline void Configure(RETURN (CLASS::*function)(ARGS...) const) {
-		return Configure(ExtractMFP(function));
-	}
-
-	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
-		auto original_func = KHook::FindOriginal((void*)_hooked_addr);
-		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
-		return (this_ptr->*mfp)(args...);
-	}
-protected:
 	// Various filters to make MemberHook class useful
 	fnCallback _pre_callback;
 	fnCallback _post_callback;
@@ -1500,7 +1499,7 @@ public:
 			std::lock_guard guard(_m_hooked_this);
 			_hooked_this.insert(this_ptr);
 		}
-		Configure(*(void***)this_ptr);
+		_Setup(*(void***)this_ptr);
 	}
 
 	void Remove(CLASS* this_ptr) {
@@ -1510,13 +1509,28 @@ public:
 		}
 	}
 
+	void AddGlobal(CLASS* this_ptr) {
+		{
+			std::lock_guard guard(_m_hooked_this);
+			_hooked_global.insert(*(void***)this_ptr);
+		}
+		_Setup(*(void***)this_ptr);
+	}
+
+	void RemoveGlobal(CLASS* this_ptr) {
+		{
+			std::lock_guard guard(_m_hooked_this);
+			_hooked_global.erase(*(void***)this_ptr);
+		}
+	}
+
 	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
 		auto original_func = KHook::FindOriginalVirtual(*(void***)this_ptr, _vtbl_index);
 		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
 		return (this_ptr->*mfp)(args...);
 	}
 
-	void SetIndex(std::int32_t index) {
+	void Configure(std::int32_t index) {
 		if (_vtbl_index == index) {
 			return;
 		}
@@ -1536,6 +1550,22 @@ public:
 		}
 		_vtbl_index = index;
 	}
+
+	void Configure(RETURN (CLASS::*function)(ARGS...)) {
+		std::int32_t index = KHook::GetVtableIndex(function);
+		if (index == -1) {
+			return;
+		}
+		Configure(index);
+	}
+
+	void Configure(RETURN (CLASS::*function)(ARGS...) const) {
+		std::int32_t index = KHook::GetVtableIndex(function);
+		if (index == -1) {
+			return;
+		}
+		Configure(index);
+	}
 protected:
 	// Various filters to make MemberHook class useful
 	fnCallback _pre_callback;
@@ -1553,6 +1583,7 @@ protected:
 
 	std::mutex _m_hooked_this;
 	std::unordered_set<CLASS*> _hooked_this;
+	std::unordered_set<void**> _hooked_global;
 
 	// Called by KHook
 	void _KHook_RemovedHook(HookID_t id) {
@@ -1563,7 +1594,7 @@ protected:
 		}
 	}
 
-	void Configure(void** vtable) {
+	void _Setup(void** vtable) {
 		if (vtable == nullptr || _in_deletion || _vtbl_index == INVALID_VTBL_INDEX) {
 			return;
 		}
@@ -1599,8 +1630,12 @@ protected:
 	void _KHook_Callback_Fixed(bool post, CLASS* hooked_this, ARGS... args) { 
 		{
 			std::lock_guard guard(this->_m_hooked_this);
+			// Did we hook this ptr
 			if (_hooked_this.find(hooked_this) == _hooked_this.end()) {
-				return;
+				// This is perhaps a global hook instead
+				if (_hooked_global.find(*(void***)hooked_this) == _hooked_global.end()) {
+					return;
+				}
 			}
 		}
 
