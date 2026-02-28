@@ -1,0 +1,31 @@
+import os
+
+libgtest = builder.StaticLibraryProject('libgtest')
+libgtest.sources += [
+  os.path.join(builder.sourcePath, 'third_party', 'googletest', 'googletest', 'src', 'gtest-all.cc'),
+]
+
+for compiler in GTest.all_targets:
+  binary = libgtest.Configure(compiler, libgtest.name, 'Release - {0}'.format(compiler.target.arch))
+  compiler = binary.compiler
+
+  compiler.includes += [
+    os.path.join(builder.sourcePath, 'third_party', 'googletest', 'googletest', 'include'),
+    os.path.join(builder.sourcePath, 'third_party', 'googletest', 'googletest'),
+  ]
+
+  if compiler.like('gcc'):
+    pass
+  elif compiler.family == 'msvc':
+    compiler.cxxflags += [
+      '/EHsc'
+    ]
+
+  if compiler.target.platform == 'linux':
+    pass
+  elif compiler.target.platform == 'mac':
+    pass
+  elif compiler.target.platform == 'windows':
+    pass
+
+GTest.libgtest = builder.Add(libgtest)

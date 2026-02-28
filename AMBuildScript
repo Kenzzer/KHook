@@ -3,6 +3,9 @@ class KHook(object):
     self.all_targets = []
     self.libsafetyhook = {}
     self.libkhook = {}
+    self.libgtest = {}
+    self.test_binaries = []
+
   def configure(self):
     target_archs = []
     if builder.options.targets:
@@ -35,3 +38,9 @@ KH = KHook()
 KH.configure()
 builder.Build('third_party/safetyhook/AMBuilder', {'SafetyHook': KH})
 builder.Build('AMBuilder', {'KHook': KH})
+
+if getattr(builder.options, 'enable_tests', False):
+  builder.Build('test/AMBuilder.gtest', {'GTest': KH})
+  builder.Build('test/AMBuilder', {'TestRunner': KH, 'KHook': KH, 'SafetyHook': KH})
+
+builder.Build('PackageScript', {'KHook': KH})

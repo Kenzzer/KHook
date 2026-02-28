@@ -1,3 +1,9 @@
 [submodule "third_party/safetyhook"]
 	path = third_party/safetyhook
 	url = https://github.com/alliedmodders/safetyhook
+[submodule "third_party/googletest"]
+	path = third_party/googletest
+	url = https://github.com/google/googletest.git
+[submodule "third_party/gtest-parallel"]
+	path = third_party/gtest-parallel
+	url = https://github.com/google/gtest-parallel.git

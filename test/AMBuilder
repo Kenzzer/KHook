@@ -1,0 +1,50 @@
+import os
+
+projectName = 'testrunner' 
+
+for compiler in TestRunner.all_targets:
+  binary = compiler.Program(projectName)
+  compiler = binary.compiler
+
+  compiler.cxxincludes += [os.path.join(builder.sourcePath, 'include')]
+  compiler.cxxdefines += ['KHOOK_STANDALONE','KHOOK_EXPORT']
+
+  for task in TestRunner.libkhook:
+    if task.target.arch == compiler.target.arch:
+      compiler.linkflags += [task.binary]
+    for task in TestRunner.libsafetyhook:
+      if task.target.arch == compiler.target.arch:
+        compiler.linkflags += [task.binary]
+
+  compiler.includes += [
+    os.path.join(builder.sourcePath, 'third_party', 'googletest', 'googletest', 'include')
+  ]
+
+  for task in TestRunner.libgtest:
+    if task.target.arch == compiler.target.arch:
+      compiler.linkflags += [task.binary]
+
+  binary.sources += [
+    'main.cpp',
+    'test_functions.cpp',
+    'test_members.cpp',
+    'test_static_hook.cpp',
+    'test_virtuals.cpp',
+    'test_virtual_hook.cpp',
+  ]
+
+  if compiler.like('gcc'):
+    pass
+  elif compiler.family == 'msvc':
+    compiler.cxxflags += [
+      '/EHsc'
+    ]
+
+  if compiler.target.platform == 'linux':
+    pass
+  elif compiler.target.platform == 'mac':
+    pass
+  elif compiler.target.platform == 'windows':
+    pass
+
+  TestRunner.test_binaries += [builder.Add(binary)]

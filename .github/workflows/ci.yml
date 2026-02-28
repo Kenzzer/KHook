@@ -11,6 +11,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+        arch: [x86, x86_64]
         include:
           - os: ubuntu-latest
             cc: clang
@@ -19,7 +20,7 @@ jobs:
             cc: msvc
       fail-fast: false
 
-    name: ${{ matrix.os }} - ${{ matrix.cc }}
+    name: ${{ matrix.os }} - ${{ matrix.cc }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -78,5 +79,11 @@ jobs:
         run: |
           mkdir build
           cd build
-          python ../configure.py
+          python ../configure.py --targets ${{ matrix.arch }} --enable-tests
           ambuild
+      
+      - name: Test
+        shell: bash
+        working-directory: repository
+        run: |
+          python ./test.py --target ${{ matrix.arch }} --skip-build
