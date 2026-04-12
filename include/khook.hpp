@@ -62,6 +62,8 @@ struct Return<void> {
 };
 
 class __Hook {
+public:
+	virtual ~__Hook() = default;
 };
 
 template<typename RETURN>
