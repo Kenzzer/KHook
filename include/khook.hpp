@@ -1956,7 +1956,7 @@ protected:
 		{
 			std::lock_guard guard(_hooks_stored);
 			// Retrieve the hookID with this vtable if it exists
-			if (_addr_hook_ids.find(vtable) != _addr_hook_ids.end()) {
+			if (_addr_hook_ids.find(vtable + _vtbl_index) != _addr_hook_ids.end()) {
 				// Already hooked so ignore
 				return;
 			}
@@ -1975,8 +1975,8 @@ protected:
 		);
 		if (id != INVALID_HOOK) {
 			std::lock_guard guard(_hooks_stored);
-			_hook_ids_addr[id] = vtable[_vtbl_index];
-			_addr_hook_ids[vtable[_vtbl_index]] = id;
+			_hook_ids_addr[id] = vtable + _vtbl_index;
+			_addr_hook_ids[vtable + _vtbl_index] = id;
 		}
 	}
 
