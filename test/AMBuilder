@@ -28,6 +28,7 @@ for compiler in TestRunner.all_targets:
     'main.cpp',
     'test_functions.cpp',
     'test_members.cpp',
+    'test_regressions.cpp',
     'test_static_hook.cpp',
     'test_virtuals.cpp',
     'test_virtual_hook.cpp',
