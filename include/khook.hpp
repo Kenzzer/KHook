@@ -607,9 +607,9 @@ protected:
 			(void*)Self::_KHook_MakeReturn, // returnMFP,
 			(void*)Self::_KHook_MakeOriginalCall, // callOriginalMFP
 #ifdef _WIN64
-			(sizeof(ARGS...) + ... + 32),
+			(sizeof(ARGS) + ... + 32),
 #else
-			(sizeof(ARGS...) + ... + 0),
+			(sizeof(ARGS) + ... + 0),
 #endif
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
@@ -1244,9 +1244,9 @@ protected:
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
 #ifdef _WIN64
-			(sizeof(ARGS...) + ... + 32),
+			(sizeof(ARGS) + ... + 32),
 #else
-			(sizeof(ARGS...) + ... + 0),
+			(sizeof(ARGS) + ... + 0),
 #endif
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
@@ -1984,9 +1984,9 @@ protected:
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
 #ifdef _WIN64
-			(sizeof(ARGS...) + ... + 32),
+			(sizeof(ARGS) + ... + 32),
 #else
-			(sizeof(ARGS...) + ... + 0),
+			(sizeof(ARGS) + ... + 0),
 #endif
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
@@ -2192,7 +2192,7 @@ inline std::invoke_result_t<F, ARGS...> CallOriginal(F f, ARGS&&... args) {
 class IKHook {
 public:
 	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
-	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
+	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
 	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
 	virtual void* GetContext() = 0;
 	virtual void* GetOriginalFunction() = 0;
@@ -2223,7 +2223,7 @@ KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_functi
 	return __exported__khook->SetupHook(function, context, removed_function, pre, post, make_return, make_call_original, stack_size, async);
 }
 
-KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
@@ -2234,7 +2234,7 @@ KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, voi
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
 		return INVALID_HOOK;
 	}
-	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, async);
+	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, stack_size, async);
 }
 
 KHOOK_API void RemoveHook(HookID_t id, bool async) {
