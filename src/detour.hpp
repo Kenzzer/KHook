@@ -53,7 +53,7 @@ namespace KHook {
 		using AsmJit = Asm::x86_Jit;
 #endif
 
-		DetourCapsule();
+		DetourCapsule(std::uint32_t stack_size);
 		~DetourCapsule();
 
 		struct InsertHookDetails {

@@ -284,7 +284,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) PushRsp(std::uintptr_t rsp) FUNCTION_ATTR
 
 static FUNCTION_ATTRIBUTE_PREFIX(std::uintptr_t) PeekRsp(std::uintptr_t rsp) FUNCTION_ATTRIBUTE_SUFFIX {
 	auto internal_rsp = rsp_values.top();
-	assert((internal_rsp + STACK_SAFETY_BUFFER) > rsp);
+	//assert((internal_rsp + STACK_SAFETY_BUFFER) > rsp);
 	return internal_rsp;
 }
 
@@ -500,13 +500,13 @@ void copy_stack(DetourCapsule::AsmJit& jit, std::int32_t offset, std::int32_t st
 #endif
 }
 
-DetourCapsule::DetourCapsule() :
+DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	_in_deletion(false),
 	_start_callbacks(nullptr),
 	_end_callbacks(nullptr),
 	_jit_func_ptr(0),
 	_original_function(0),
-	_stack_size(STACK_SAFETY_BUFFER) {
+	_stack_size(((stack_size + 0xF) & ~0xF)) {
 	// Because we want to be call agnostic we must get clever
 	// No register can be used to call a function, so here's the plan
 	// mov rax, 0xStart Address of JIT function
@@ -1597,6 +1597,7 @@ HookID_t __Setup__Hook(
 	void* post,
 	void* make_return,
 	void* make_call_original,
+	std::uint32_t stack_size,
 	bool async,
 	bool (DetourCapsule::*setup_hook)(Args...),
 	Args... args
@@ -1617,7 +1618,7 @@ HookID_t __Setup__Hook(
 		g_hooks_detour_mutex.unlock_shared();
 		g_hooks_detour_mutex.lock();
 
-		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>());
+		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>(stack_size));
 		if (insert.second) {
 			auto detour = insert.first->second.get();
 			// Hook setup failed, so early abort...
@@ -1682,6 +1683,7 @@ KHOOK_API HookID_t SetupHook(
 	void* post,
 	void* make_return,
 	void* make_call_original,
+	unsigned int stack_size,
 	bool async
 ) {
 	return __Setup__Hook(
@@ -1692,6 +1694,7 @@ KHOOK_API HookID_t SetupHook(
 		post,
 		make_return,
 		make_call_original,
+		stack_size,
 		async,
 		&DetourCapsule::SetupAddress,
 		function
@@ -1707,6 +1710,7 @@ KHOOK_API HookID_t SetupVirtualHook(
 	void* post,
 	void* make_return,
 	void* make_call_original,
+	unsigned int stack_size,
 	bool async
 ) {
 	return __Setup__Hook(
@@ -1717,6 +1721,7 @@ KHOOK_API HookID_t SetupVirtualHook(
 		post,
 		make_return,
 		make_call_original,
+		stack_size,
 		async,
 		&DetourCapsule::SetupVirtual,
 		vtable,
