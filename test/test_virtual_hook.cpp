@@ -140,7 +140,7 @@ class VirtualHookTests: public ::testing::Test {
         }
 
         NOINLINE int OverrideSetObjectValue(TestObject* obj, int value) {
-            auto recall = KHook::BuildMFP<FakeClass, int, TestObject*, int>(
+            auto recall = KHook::BuildMFP<int (FakeClass::*)(TestObject*, int)>(
                 KHook::DoRecall(
                     KHook::Action::Ignore,
                     nullptr,

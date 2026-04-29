@@ -1399,7 +1399,7 @@ DetourCapsule::~DetourCapsule() {
 	// Iterate through all existing hooks and kill them
 	for (auto& callback : _callbacks) {
 		auto& hook = callback.second;
-		auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook->hook_fn_remove));
+		auto mfp = KHook::BuildMFP<void (EmptyClass::*)(HookID_t)>(reinterpret_cast<void*>(hook->hook_fn_remove));
 		(((EmptyClass*)(hook->hook_ptr))->*mfp)(callback.first);
 	}
 	_callbacks.clear();
@@ -1493,7 +1493,7 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 		
 		_callbacks.erase(it);
 
-		auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook->hook_fn_remove));
+		auto mfp = BuildMFP<void (EmptyClass::*)(HookID_t)>(reinterpret_cast<void*>(hook->hook_fn_remove));
 		(((EmptyClass*)(hook->hook_ptr))->*mfp)(id);
 	}
 }
@@ -1751,7 +1751,7 @@ KHOOK_API void RemoveHook(
 
 			// Invoke remove callback
 			auto& hook = it->second;
-			auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook.hook_fn_remove));
+			auto mfp = ::KHook::BuildMFP<void (EmptyClass::*)(HookID_t)>(reinterpret_cast<void*>(hook.hook_fn_remove));
 			(((EmptyClass*)(hook.hook_ptr))->*mfp)(id);
 			return;
 		}
