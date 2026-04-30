@@ -8,7 +8,7 @@ namespace KHook {
 
 using namespace KHook::Asm;
 
-#define STACK_SAFETY_BUFFER 112
+#define STACK_SAFETY_BUFFER 128
 
 #ifdef KHOOK_X64
 #define FUNCTION_ATTRIBUTE_PREFIX(ret) ret
