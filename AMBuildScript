@@ -32,6 +32,8 @@ class KHook(object):
             cxx.cxxflags += [
                 '/std:c++17'
             ]
+        if getattr(builder.options, 'enable_tests', False):
+            cxx.defines += ['KHOOK_TESTS']
 
 
 KH = KHook()

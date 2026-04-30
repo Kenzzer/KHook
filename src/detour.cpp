@@ -507,6 +507,10 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	_jit_func_ptr(0),
 	_original_function(0),
 	_stack_size(((stack_size + 0xF) & ~0xF)) {
+#if defined(KHOOK_TESTS) || defined(KHOOK_DEBUG_PRINT)
+	printf("DetourCapsule::ctor(%hd)\n", _stack_size);
+#endif
+
 	// Because we want to be call agnostic we must get clever
 	// No register can be used to call a function, so here's the plan
 	// mov rax, 0xStart Address of JIT function
