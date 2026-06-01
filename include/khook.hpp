@@ -165,6 +165,34 @@ inline void* ExtractMFP(FUNC mfp) {
 	return open.details.addr;
 }
 
+template<typename T>
+struct __internal__member_function_class;
+
+#define __INTERNAL__KHOOK_MAKE_TRAIT(...) \
+template<typename R, typename C, typename... Args> \
+struct __internal__member_function_class<R(C::*)(Args...) __VA_ARGS__> \
+{ \
+    using type = C; \
+};
+
+__INTERNAL__KHOOK_MAKE_TRAIT()
+__INTERNAL__KHOOK_MAKE_TRAIT(const)
+__INTERNAL__KHOOK_MAKE_TRAIT(volatile)
+__INTERNAL__KHOOK_MAKE_TRAIT(const volatile)
+
+__INTERNAL__KHOOK_MAKE_TRAIT(&)
+__INTERNAL__KHOOK_MAKE_TRAIT(const &)
+__INTERNAL__KHOOK_MAKE_TRAIT(volatile &)
+__INTERNAL__KHOOK_MAKE_TRAIT(const volatile &)
+
+__INTERNAL__KHOOK_MAKE_TRAIT(&&)
+__INTERNAL__KHOOK_MAKE_TRAIT(const &&)
+__INTERNAL__KHOOK_MAKE_TRAIT(volatile &&)
+__INTERNAL__KHOOK_MAKE_TRAIT(const volatile &&)
+
+__INTERNAL__KHOOK_MAKE_TRAIT(noexcept)
+__INTERNAL__KHOOK_MAKE_TRAIT(const noexcept)
+
 /**
  * Creates a hook around the given function address.
  *
@@ -1327,14 +1355,15 @@ protected:
 template<typename FUNC>
 inline std::int32_t GetVtableIndex(FUNC function);
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline __mfp__<CLASS, RETURN, ARGS...> GetVtableFunction(CLASS* ptr, RETURN (CLASS::*mfp)(ARGS...)) {
+template<typename CLASS, typename FUNC>
+inline FUNC GetVtableFunction(CLASS* ptr, FUNC mfp) {
+	static_assert(std::is_member_function_pointer<FUNC>::value, "Error: FUNC is not a member function pointer!");
 	void** vtable = *(void***)ptr;
 	auto index = ::KHook::GetVtableIndex(mfp);
 	if (index == -1) {
 		return nullptr;
 	}
-	return ::KHook::BuildMFP(vtable[index]);
+	return ::KHook::BuildMFP<FUNC>(vtable[index]);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
