@@ -62,7 +62,6 @@ jobs:
       - name: Setup AMBuild
         shell: bash
         run: |
-          cd "${{ env.CACHE_PATH }}"
           python -m pip install ./ambuild
 
       - name: Select clang compiler
