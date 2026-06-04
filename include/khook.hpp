@@ -582,7 +582,7 @@ protected:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
-		constexpr int return_size = 0;
+		int return_size = 0;
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return_size = sizeof(RETURN);
 		}
@@ -1225,7 +1225,7 @@ protected:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
-		constexpr int return_size = 0;
+		int return_size = 0;
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return_size = sizeof(RETURN);
 		}
@@ -1893,7 +1893,7 @@ protected:
 			}
 		}
 
-		constexpr int return_size = 0;
+		int return_size = 0;
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return_size = sizeof(RETURN);
 		}
