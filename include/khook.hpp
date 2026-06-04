@@ -582,6 +582,11 @@ protected:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
+		constexpr int return_size = 0;
+		if constexpr(!std::is_same<RETURN, void>::value) {
+			return_size = sizeof(RETURN);
+		}
+
 		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
@@ -590,6 +595,7 @@ protected:
 			(void*)Self::_KHook_Callback_POST, // postMFP
 			(void*)Self::_KHook_MakeReturn, // returnMFP,
 			(void*)Self::_KHook_MakeOriginalCall, // callOriginalMFP
+			return_size + sizeof(void*) +
 #ifdef _WIN64
 			(sizeof(ARGS) + ... + 32),
 #else
@@ -1219,6 +1225,11 @@ protected:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
+		constexpr int return_size = 0;
+		if constexpr(!std::is_same<RETURN, void>::value) {
+			return_size = sizeof(RETURN);
+		}
+
 		_associated_hook_id = SetupHook(
 			(void*)address,
 			this,
@@ -1227,6 +1238,7 @@ protected:
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
+			return_size + sizeof(void*) +
 #ifdef _WIN64
 			(sizeof(ARGS) + ... + 32),
 #else
@@ -1881,6 +1893,11 @@ protected:
 			}
 		}
 
+		constexpr int return_size = 0;
+		if constexpr(!std::is_same<RETURN, void>::value) {
+			return_size = sizeof(RETURN);
+		}
+
 		auto id = ::KHook::SetupVirtualHook(
 			vtable,
 			_vtbl_index,
@@ -1890,6 +1907,7 @@ protected:
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
+			return_size + sizeof(void*) +
 #ifdef _WIN64
 			(sizeof(ARGS) + ... + 32),
 #else
