@@ -78,6 +78,30 @@ public:
 		}
 	}
 protected:
+	template <typename... ARGS>
+	static constexpr std::uint32_t _copy_stack_size() {
+#ifdef _WIN64
+		std::uint32_t num_args = sizeof...(ARGS);
+		if constexpr(!std::is_void_v<RETURN>) {
+			// Return value can be inserted as first arg as pointer to caller-alloc'd buffer 
+			// (i.e., size != 1,2,4,8 or not C++03 POD).
+			// Add +1 to cover this case even if the return value doesn't end up being pushed
+			// as an arg, better to copy more than not enough.
+			num_args += 1;
+		}
+
+		std::uint32_t num_stack_args = (num_args <= 4) ? 0 : (num_args - 4);
+		return num_stack_args * 8 + 32;
+#else
+		std::uint32_t return_size = 0;
+		if constexpr(!std::is_void_v<RETURN>) {
+			return_size = sizeof(RETURN);
+		}
+
+		return return_size + (sizeof(ARGS) + ... + 0);
+#endif
+	}
+protected:
 	RETURN* _fake_return = nullptr;
 };
 
@@ -582,11 +606,6 @@ protected:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
-		int return_size = 0;
-		if constexpr(!std::is_same<RETURN, void>::value) {
-			return_size = sizeof(RETURN);
-		}
-
 		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
@@ -595,12 +614,7 @@ protected:
 			(void*)Self::_KHook_Callback_POST, // postMFP
 			(void*)Self::_KHook_MakeReturn, // returnMFP,
 			(void*)Self::_KHook_MakeOriginalCall, // callOriginalMFP
-			return_size + sizeof(void*) +
-#ifdef _WIN64
-			(sizeof(ARGS) + ... + 32),
-#else
-			(sizeof(ARGS) + ... + 0),
-#endif
+			_copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (_associated_hook_id != INVALID_HOOK) {
@@ -1238,12 +1252,7 @@ protected:
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
-			return_size + sizeof(void*) +
-#ifdef _WIN64
-			(sizeof(ARGS) + ... + 32),
-#else
-			(sizeof(ARGS) + ... + 0),
-#endif
+			_copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (_associated_hook_id != INVALID_HOOK) {
@@ -1907,12 +1916,7 @@ protected:
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
-			return_size + sizeof(void*) +
-#ifdef _WIN64
-			(sizeof(ARGS) + ... + 32),
-#else
-			(sizeof(ARGS) + ... + 0),
-#endif
+			_copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (id != INVALID_HOOK) {
