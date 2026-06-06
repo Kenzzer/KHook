@@ -4,235 +4,278 @@
 #include <vector>
 #include "helpers.hpp"
 
-class IWideCallTarget
-{
-public:
-    virtual ~IWideCallTarget() = default;
-    virtual void DispatchWithManyArgs(
-        void *selector,
-        int targetId,
-        int groupId,
-        void *label,
-        float scale,
-        float spread,
-        int flags = 0,
-        int variant = 100,
-        int mode = 0,
-        void *primaryPoint = nullptr,
-        void *secondaryPoint = nullptr,
-        void *pointHistory = nullptr,
-        bool refreshState = true,
-        float scheduledTime = 0.0f,
-        int ownerToken = -1) = 0;
-};
+namespace {
+	// Tests high-level classes Function, Virtual, and Member and verifies
+	// that, after hooking, that all arguments and return values are 
+	// passed to the detour callback and the original function unchanged,
+	// especially when calling conventions dictate that arguments be passed
+	// onto the stack.
+	// 
+	// This verifies that enough of the stack is being copied by the hook 
+	// classes, prior to execution being passed onto callbacks and the 
+	// originally hooked function.
+	namespace stack_copy_size {
+		template <std::uint32_t INDEX, typename RETURN, typename... ARGS>
+		class TestCase;
 
-struct WideCallArgs
-{
-    void *target = nullptr;
-    void *selector = nullptr;
-    int targetId = 0;
-    int groupId = 0;
-    void *label = nullptr;
-    float scale = 0.0f;
-    float spread = 0.0f;
-    int flags = 0;
-    int variant = 0;
-    int mode = 0;
-    void *primaryPoint = nullptr;
-    void *secondaryPoint = nullptr;
-    void *pointHistory = nullptr;
-    bool refreshState = false;
-    float scheduledTime = 0.0f;
-    int ownerToken = 0;
-};
+		using Case1 = TestCase<1, void, bool, bool, bool, void*>;
+		using Case2 = TestCase<2, void,
+			void*, int, int, const char*,
+			float, float, int, int, int,
+			void*, void*, void*, bool, float, int>;
+		using Case3 = TestCase<3, void, bool, void*>;
+		using Case4 = TestCase<4, void, bool, bool, bool, bool, bool, int>;
+		using Case5 = TestCase<5, int, int>;
+		using Case6 = TestCase<6, std::tuple<void*, void*, void*>, int, int>;
+		using Case7 = TestCase<7, std::tuple<void*, void*, void*>>;
+		using Case8 = TestCase<8, void,
+			void*, int, int, const char*,
+			float, float, int, int, int,
+			void*, void*, void*, bool, float, int,
+			bool, bool, bool, bool, int>;
+		using AllCases = ::testing::Types<
+			Case1,
+			Case2,
+			Case3,
+			Case4,
+			Case5,
+			Case6,
+			Case7,
+			Case8>;
 
-struct WideCallArgsTestState
-{
-    WideCallArgs expectedArgs;
-    int preHookCalls = 0;
-    int originalCalls = 0;
+		template <std::uint32_t INDEX, typename RETURN, typename... ARGS>
+		class TestCase {
+		public:
+			using Self = TestCase<INDEX, RETURN, ARGS...>;
+			using ArgsTuple = std::tuple<ARGS...>;
+			using Return = RETURN;
+			using FunctionHook = ::KHook::Function<RETURN, ARGS...>;
+			using MemberHook = ::KHook::Member<Self, RETURN, ARGS...>;
+			using VirtualHook = ::KHook::Virtual<Self, RETURN, ARGS...>;
 
-    void AssertEquals(const WideCallArgs &actualArgs)
-    {
-        EXPECT_EQ(actualArgs.target, expectedArgs.target);
-        EXPECT_EQ(actualArgs.selector, expectedArgs.selector);
-        EXPECT_EQ(actualArgs.targetId, expectedArgs.targetId);
-        EXPECT_EQ(actualArgs.groupId, expectedArgs.groupId);
-        EXPECT_EQ(actualArgs.label, expectedArgs.label);
-        EXPECT_EQ(actualArgs.scale, expectedArgs.scale);
-        EXPECT_EQ(actualArgs.spread, expectedArgs.spread);
-        EXPECT_EQ(actualArgs.flags, expectedArgs.flags);
-        EXPECT_EQ(actualArgs.variant, expectedArgs.variant);
-        EXPECT_EQ(actualArgs.mode, expectedArgs.mode);
-        EXPECT_EQ(actualArgs.primaryPoint, expectedArgs.primaryPoint);
-        EXPECT_EQ(actualArgs.secondaryPoint, expectedArgs.secondaryPoint);
-        EXPECT_EQ(actualArgs.pointHistory, expectedArgs.pointHistory);
-        EXPECT_EQ(actualArgs.refreshState, expectedArgs.refreshState);
-        EXPECT_EQ(actualArgs.scheduledTime, expectedArgs.scheduledTime);
-        EXPECT_EQ(actualArgs.ownerToken, expectedArgs.ownerToken);
-    }
-};
+			static constexpr typename Self::ArgsTuple GetExpectedArgs() {
+				if constexpr(std::is_same_v<Self, Case1>) {
+					return std::make_tuple(false, true, false, nullptr);
+				}
+				else if constexpr(std::is_same_v<Self, Case2>) {
+					return std::make_tuple(
+						reinterpret_cast<void*>((std::uintptr_t)0xDEADBEEF),
+						17,
+						5,
+						"42",
+						0.25f,
+						0.68f,
+						19,
+						123,
+						7,
+						nullptr,
+						reinterpret_cast<void*>((std::uintptr_t)0x1002),
+						reinterpret_cast<void*>((std::uintptr_t)0x80099),
+						false,
+						3.5f,
+						1337);
+				}
+				else if constexpr(std::is_same_v<Self, Case3>) {
+					return std::make_tuple(true, reinterpret_cast<void*>((std::uintptr_t)0xDEADBEEF));
+				}
+				else if constexpr(std::is_same_v<Self, Case4>) {
+					return std::make_tuple(true, false, false, true, true, 1337);
+				}
+				else if constexpr(std::is_same_v<Self, Case5>) {
+					return std::make_tuple(12);
+				}
+				else if constexpr(std::is_same_v<Self, Case6>) {
+					return std::make_tuple(45, 22);
+				}
+				else if constexpr(std::is_same_v<Self, Case7>) {
+					return std::make_tuple();
+				}
+				else if constexpr(std::is_same_v<Self, Case8>) {
+					return std::make_tuple(
+						reinterpret_cast<void*>((std::uintptr_t)0xDEADBEEF),
+						17,
+						5,
+						"42",
+						0.25f,
+						0.68f,
+						19,
+						123,
+						7,
+						nullptr,
+						reinterpret_cast<void*>((std::uintptr_t)0x1002),
+						reinterpret_cast<void*>((std::uintptr_t)0x80099),
+						false,
+						3.5f,
+						1337,
+						true,
+						false,
+						true,
+						true,
+						70023);
+				}
+				else {
+					static_assert(false, "expected arguments not set for test case");
+				}
+			}
 
-static WideCallArgsTestState *g_wideCallTestState = nullptr;
+			static constexpr typename RETURN GetExpectedReturn() {
+				if constexpr(std::is_void_v<RETURN>) {
+					return;
+				}
+				else if constexpr(std::is_same_v<Self, Case5>) {
+					return 25;
+				}
+				else if constexpr(std::is_same_v<Self, Case6>) {
+					return std::make_tuple(
+						reinterpret_cast<void*>((std::uintptr_t)0xDEADBEEF),
+						reinterpret_cast<void*>((std::uintptr_t)0x1002),
+						reinterpret_cast<void*>((std::uintptr_t)0x80099)
+					);
+				}
+				else if constexpr(std::is_same_v<Self, Case7>) {
+					return std::make_tuple(
+						reinterpret_cast<void*>((std::uintptr_t)0xDEADBEEF),
+						reinterpret_cast<void*>((std::uintptr_t)0xBEEFDEAD),
+						reinterpret_cast<void*>((std::uintptr_t)0x1200056)
+					);
+				}
+				else {
+					static_assert(false, "expected return not set for test case");
+				}
+			}
 
-class WideCallTarget : public IWideCallTarget
-{
-public:
-    void DispatchWithManyArgs(
-        void *selector,
-        int targetId,
-        int groupId,
-        void *label,
-        float scale,
-        float spread,
-        int flags,
-        int variant,
-        int mode,
-        void *primaryPoint,
-        void *secondaryPoint,
-        void *pointHistory,
-        bool refreshState,
-        float scheduledTime,
-        int ownerToken) override
-    {
-        SCOPED_TRACE("original method");
+			TestCase() : _orig_calls(0), _hook_calls(0) {
+				_expected_args = GetExpectedArgs();
+			}
 
-        ++g_wideCallTestState->originalCalls;
-        g_wideCallTestState->AssertEquals({
-            this,
-            selector,
-            targetId,
-            groupId,
-            label,
-            scale,
-            spread,
-            flags,
-            variant,
-            mode,
-            primaryPoint,
-            secondaryPoint,
-            pointHistory,
-            refreshState,
-            scheduledTime,
-            ownerToken,
-        });
-    }
-};
+			static NOINLINE RETURN FunctionCall(ARGS... args) {
+				SCOPED_TRACE("original method");
+				auto actual = std::make_tuple(args...);
+				_orig_static_calls++;
+				EXPECT_EQ(_expected_args, actual);
+				if constexpr(!std::is_void_v<RETURN>) {
+					return GetExpectedReturn();
+				}
+			}
 
-using WideCallVirtualHook = KHook::Virtual<
-    IWideCallTarget,
-    void,
-    void *,
-    int,
-    int,
-    void *,
-    float,
-    float,
-    int,
-    int,
-    int,
-    void *,
-    void *,
-    void *,
-    bool,
-    float,
-    int>;
+			NOINLINE RETURN MemberCall(ARGS... args) {
+				SCOPED_TRACE("original method");
+				auto actual = std::make_tuple(args...);
+				_orig_calls++;
+				EXPECT_EQ(_expected_args, actual);
+				if constexpr(!std::is_void_v<RETURN>) {
+					return GetExpectedReturn();
+				}
+			}
 
-static KHook::Return<void> WideCallPreValidateIgnore(
-    IWideCallTarget *hookedThis,
-    void *selector,
-    int targetId,
-    int groupId,
-    void *label,
-    float scale,
-    float spread,
-    int flags,
-    int variant,
-    int mode,
-    void *primaryPoint,
-    void *secondaryPoint,
-    void *pointHistory,
-    bool refreshState,
-    float scheduledTime,
-    int ownerToken)
-{
-    SCOPED_TRACE("pre-hook");
+			virtual RETURN VirtualCall(ARGS... args) {
+				SCOPED_TRACE("original method");
+				auto actual = std::make_tuple(args...);
+				_orig_calls++;
+				EXPECT_EQ(_expected_args, actual);
+				if constexpr(!std::is_void_v<RETURN>) {
+					return GetExpectedReturn();
+				}
+			}
 
-    ++g_wideCallTestState->preHookCalls;
-    g_wideCallTestState->AssertEquals({
-        hookedThis,
-        selector,
-        targetId,
-        groupId,
-        label,
-        scale,
-        spread,
-        flags,
-        variant,
-        mode,
-        primaryPoint,
-        secondaryPoint,
-        pointHistory,
-        refreshState,
-        scheduledTime,
-        ownerToken,
-    });
-    return {KHook::Action::Ignore};
-}
+			static KHook::Return<RETURN> Callback(Self* hookedThis, ARGS... args) {
+				SCOPED_TRACE("hook callback");
+				auto actual = std::make_tuple(args...);
+				hookedThis->_hook_calls++;
+				EXPECT_EQ(hookedThis->_expected_args, actual);
+				return { KHook::Action::Ignore };
+			}
 
-TEST(RegressionTests, WideVirtualCallArgumentsRemainConsistentAfterNoopPreHook)
-{
-    WideCallTarget target;
-    IWideCallTarget *targetPtr = &target; // prevent compiler from de-virtualizing the call
+			KHook::Return<RETURN> Callback(ARGS... args) {
+				SCOPED_TRACE("hook callback");
+				auto actual = std::make_tuple(args...);
+				_hook_calls++;
+				EXPECT_EQ(_expected_args, actual);
+				return { KHook::Action::Ignore };
+			}
+		public:
+			static std::uint32_t GetNumOrigStaticCalls() { return _orig_static_calls; }
+			std::uint32_t GetNumOrigCalls() const { return _orig_calls; }
+			std::uint32_t GetNumHookCalls() const { return _hook_calls; }
+		private:
+			static inline std::uint32_t _orig_static_calls = 0;
+			static inline ArgsTuple _expected_args;
+			std::uint32_t _orig_calls;
+			std::uint32_t _hook_calls;
+		};
 
-    int selector = 24;
-    float primaryPoint = 1.0f;
-    float secondaryPoint = 3.0f;
-    std::vector<float> pointHistory{8.0f, 13.0f, 21.0f};
+		template <typename CASE>
+		class Regression_StackCopySizeTests : public ::testing::Test {
+		protected:
+			void SetUp() override {
+				_case = new CASE;
+			}
 
-    WideCallArgsTestState state;
-    state.expectedArgs.target = targetPtr;
-    state.expectedArgs.selector = &selector;
-    state.expectedArgs.targetId = 17;
-    state.expectedArgs.groupId = 5;
-    state.expectedArgs.label = nullptr;
-    state.expectedArgs.scale = 0.42f;
-    state.expectedArgs.spread = 0.66f;
-    state.expectedArgs.flags = 19;
-    state.expectedArgs.variant = 123;
-    state.expectedArgs.mode = 7;
-    state.expectedArgs.primaryPoint = &primaryPoint;
-    state.expectedArgs.secondaryPoint = &secondaryPoint;
-    state.expectedArgs.pointHistory = &pointHistory;
-    state.expectedArgs.refreshState = false;
-    state.expectedArgs.scheduledTime = 3.5f;
-    state.expectedArgs.ownerToken = 1337;
+			void TearDown() override {
+				delete _case;
+			}
 
-    g_wideCallTestState = &state;
+			CASE* _case;
+		};
 
-    WideCallVirtualHook hook(&IWideCallTarget::DispatchWithManyArgs, &WideCallPreValidateIgnore, nullptr);
-    hook.Add(targetPtr);
+		TYPED_TEST_SUITE(Regression_StackCopySizeTests, AllCases);
 
-    targetPtr->DispatchWithManyArgs(
-        state.expectedArgs.selector,
-        state.expectedArgs.targetId,
-        state.expectedArgs.groupId,
-        state.expectedArgs.label,
-        state.expectedArgs.scale,
-        state.expectedArgs.spread,
-        state.expectedArgs.flags,
-        state.expectedArgs.variant,
-        state.expectedArgs.mode,
-        state.expectedArgs.primaryPoint,
-        state.expectedArgs.secondaryPoint,
-        state.expectedArgs.pointHistory,
-        state.expectedArgs.refreshState,
-        state.expectedArgs.scheduledTime,
-        state.expectedArgs.ownerToken);
+		TYPED_TEST(Regression_StackCopySizeTests, Function) {
+			TypeParam::FunctionHook hook(&TypeParam::FunctionCall, _case, &TypeParam::Callback, nullptr);
 
-    EXPECT_EQ(state.preHookCalls, 1) << "Pre-hook should run exactly once";
-    EXPECT_EQ(state.originalCalls, 1)
-        << "Original method should still run after Ignore";
+			auto expected = TypeParam::GetExpectedArgs();
+			std::apply([&](auto&&... args) {
+				if constexpr(std::is_void_v<TypeParam::Return>) {
+					TypeParam::FunctionCall(std::forward<decltype(args)>(args)...);
+				}
+				else {
+					auto expected_ret = TypeParam::GetExpectedReturn();
+					auto actual_ret = TypeParam::FunctionCall(std::forward<decltype(args)>(args)...);
+					EXPECT_EQ(expected_ret, actual_ret);
+				}
+			}, expected);
 
-    g_wideCallTestState = nullptr;
+			EXPECT_EQ(_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
+			EXPECT_EQ(_case->GetNumOrigStaticCalls(), 1) << "Original method should still run after Ignore";
+		}
+
+		TYPED_TEST(Regression_StackCopySizeTests, Member) {
+			TypeParam::MemberHook hook(&TypeParam::MemberCall, &TypeParam::Callback, nullptr);
+
+			auto expected = TypeParam::GetExpectedArgs();
+			std::apply([&](auto&&... args) {
+				if constexpr(std::is_void_v<TypeParam::Return>) {
+					_case->MemberCall(std::forward<decltype(args)>(args)...);
+				}
+				else {
+					auto expected_ret = TypeParam::GetExpectedReturn();
+					auto actual_ret = _case->MemberCall(std::forward<decltype(args)>(args)...);
+					EXPECT_EQ(expected_ret, actual_ret);
+				}
+			}, expected);
+
+			EXPECT_EQ(_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
+			EXPECT_EQ(_case->GetNumOrigCalls(), 1) << "Original method should still run after Ignore";
+		}
+
+		TYPED_TEST(Regression_StackCopySizeTests, Virtual) {
+			TypeParam::VirtualHook hook(&TypeParam::VirtualCall, &TypeParam::Callback, nullptr);
+			hook.Add(_case);
+
+			auto expected = TypeParam::GetExpectedArgs();
+			std::apply([&](auto&&... args) {
+				if constexpr(std::is_void_v<TypeParam::Return>) {
+					_case->VirtualCall(std::forward<decltype(args)>(args)...);
+				}
+				else {
+					auto expected_ret = TypeParam::GetExpectedReturn();
+					auto actual_ret = _case->VirtualCall(std::forward<decltype(args)>(args)...);
+					EXPECT_EQ(expected_ret, actual_ret);
+				}
+			}, expected);
+
+			EXPECT_EQ(_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
+			EXPECT_EQ(_case->GetNumOrigCalls(), 1) << "Original method should still run after Ignore";
+		}
+	}
 }
