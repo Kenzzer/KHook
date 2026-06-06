@@ -95,10 +95,10 @@ protected:
 #else
 		std::uint32_t return_size = 0;
 		if constexpr(!std::is_void_v<RETURN>) {
-			return_size = sizeof(RETURN);
+			return_size = std::max(sizeof(void*), sizeof(RETURN));
 		}
 
-		return return_size + (sizeof(ARGS) + ... + 0);
+		return return_size + (std::max(sizeof(void*), sizeof(ARGS)) + ... + 0);
 #endif
 	}
 protected:
@@ -614,7 +614,7 @@ protected:
 			(void*)Self::_KHook_Callback_POST, // postMFP
 			(void*)Self::_KHook_MakeReturn, // returnMFP,
 			(void*)Self::_KHook_MakeOriginalCall, // callOriginalMFP
-			_copy_stack_size<void*, ARGS...>(),
+			Self::template _copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (_associated_hook_id != INVALID_HOOK) {
@@ -1252,7 +1252,7 @@ protected:
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
-			_copy_stack_size<void*, ARGS...>(),
+			Self::template _copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (_associated_hook_id != INVALID_HOOK) {
@@ -1916,7 +1916,7 @@ protected:
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
-			_copy_stack_size<void*, ARGS...>(),
+			Self::template _copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (id != INVALID_HOOK) {

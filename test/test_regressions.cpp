@@ -113,12 +113,10 @@ namespace {
 						true,
 						70023);
 				}
-				else {
-					static_assert(false, "expected arguments not set for test case");
-				}
+				throw std::runtime_error("expected arguments not set for test case");
 			}
 
-			static constexpr typename RETURN GetExpectedReturn() {
+			static constexpr RETURN GetExpectedReturn() {
 				if constexpr(std::is_void_v<RETURN>) {
 					return;
 				}
@@ -139,9 +137,7 @@ namespace {
 						reinterpret_cast<void*>((std::uintptr_t)0x1200056)
 					);
 				}
-				else {
-					static_assert(false, "expected return not set for test case");
-				}
+				throw std::runtime_error("expected return not set for test case");
 			}
 
 			TestCase() : _orig_calls(0), _hook_calls(0) {
@@ -221,11 +217,11 @@ namespace {
 		TYPED_TEST_SUITE(Regression_StackCopySizeTests, AllCases);
 
 		TYPED_TEST(Regression_StackCopySizeTests, Function) {
-			TypeParam::FunctionHook hook(&TypeParam::FunctionCall, _case, &TypeParam::Callback, nullptr);
+			typename TypeParam::FunctionHook hook(&TypeParam::FunctionCall, this->_case, &TypeParam::Callback, nullptr);
 
 			auto expected = TypeParam::GetExpectedArgs();
 			std::apply([&](auto&&... args) {
-				if constexpr(std::is_void_v<TypeParam::Return>) {
+				if constexpr(std::is_void_v<typename TypeParam::Return>) {
 					TypeParam::FunctionCall(std::forward<decltype(args)>(args)...);
 				}
 				else {
@@ -235,47 +231,47 @@ namespace {
 				}
 			}, expected);
 
-			EXPECT_EQ(_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
-			EXPECT_EQ(_case->GetNumOrigStaticCalls(), 1) << "Original method should still run after Ignore";
+			EXPECT_EQ(this->_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
+			EXPECT_EQ(this->_case->GetNumOrigStaticCalls(), 1) << "Original method should still run after Ignore";
 		}
 
 		TYPED_TEST(Regression_StackCopySizeTests, Member) {
-			TypeParam::MemberHook hook(&TypeParam::MemberCall, &TypeParam::Callback, nullptr);
+			typename TypeParam::MemberHook hook(&TypeParam::MemberCall, &TypeParam::Callback, nullptr);
 
 			auto expected = TypeParam::GetExpectedArgs();
 			std::apply([&](auto&&... args) {
-				if constexpr(std::is_void_v<TypeParam::Return>) {
-					_case->MemberCall(std::forward<decltype(args)>(args)...);
+				if constexpr(std::is_void_v<typename TypeParam::Return>) {
+					this->_case->MemberCall(std::forward<decltype(args)>(args)...);
 				}
 				else {
 					auto expected_ret = TypeParam::GetExpectedReturn();
-					auto actual_ret = _case->MemberCall(std::forward<decltype(args)>(args)...);
+					auto actual_ret = this->_case->MemberCall(std::forward<decltype(args)>(args)...);
 					EXPECT_EQ(expected_ret, actual_ret);
 				}
 			}, expected);
 
-			EXPECT_EQ(_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
-			EXPECT_EQ(_case->GetNumOrigCalls(), 1) << "Original method should still run after Ignore";
+			EXPECT_EQ(this->_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
+			EXPECT_EQ(this->_case->GetNumOrigCalls(), 1) << "Original method should still run after Ignore";
 		}
 
 		TYPED_TEST(Regression_StackCopySizeTests, Virtual) {
-			TypeParam::VirtualHook hook(&TypeParam::VirtualCall, &TypeParam::Callback, nullptr);
-			hook.Add(_case);
+			typename TypeParam::VirtualHook hook(&TypeParam::VirtualCall, &TypeParam::Callback, nullptr);
+			hook.Add(this->_case);
 
 			auto expected = TypeParam::GetExpectedArgs();
 			std::apply([&](auto&&... args) {
-				if constexpr(std::is_void_v<TypeParam::Return>) {
-					_case->VirtualCall(std::forward<decltype(args)>(args)...);
+				if constexpr(std::is_void_v<typename TypeParam::Return>) {
+					this->_case->VirtualCall(std::forward<decltype(args)>(args)...);
 				}
 				else {
 					auto expected_ret = TypeParam::GetExpectedReturn();
-					auto actual_ret = _case->VirtualCall(std::forward<decltype(args)>(args)...);
+					auto actual_ret = this->_case->VirtualCall(std::forward<decltype(args)>(args)...);
 					EXPECT_EQ(expected_ret, actual_ret);
 				}
 			}, expected);
 
-			EXPECT_EQ(_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
-			EXPECT_EQ(_case->GetNumOrigCalls(), 1) << "Original method should still run after Ignore";
+			EXPECT_EQ(this->_case->GetNumHookCalls(), 1) << "Pre-hook should run exactly once";
+			EXPECT_EQ(this->_case->GetNumOrigCalls(), 1) << "Original method should still run after Ignore";
 		}
 	}
 }

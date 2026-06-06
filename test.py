@@ -12,12 +12,12 @@ CONFIGURE_SCRIPT_PATH = os.path.join(SCRIPT_DIR, "configure.py")
 def configure(build_dir, target):
   if not os.path.isdir(build_dir):
     os.mkdir(build_dir)
-  result = subprocess.run([sys.executable, CONFIGURE_SCRIPT_PATH, "--targets", target, "--enable-tests"], cwd=build_dir, shell=True)
+  result = subprocess.run([sys.executable, CONFIGURE_SCRIPT_PATH, "--targets", target, "--enable-tests"], cwd=build_dir)
   if result.returncode != 0:
     sys.exit(result.returncode)
 
 def build(build_dir):
-  result = subprocess.run(["ambuild"], cwd=build_dir, shell=True)
+  result = subprocess.run(["ambuild"], cwd=build_dir)
   if result.returncode != 0:
     sys.exit(result.returncode)
 
@@ -34,7 +34,7 @@ def run_tests(build_dir, target):
     print(f"Test binary not found: {test_binary}")
     sys.exit(1)
   gtest_parallel = os.path.abspath(GTEST_PARALLEL_PATH)
-  result = subprocess.run([sys.executable, gtest_parallel, test_binary], shell=True)
+  result = subprocess.run([sys.executable, gtest_parallel, test_binary])
   sys.exit(result.returncode)
 
 def main():
