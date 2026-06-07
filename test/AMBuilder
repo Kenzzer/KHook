@@ -42,6 +42,9 @@ for compiler in TestRunner.all_targets:
     ]
 
   if compiler.target.platform == 'linux':
+    compiler.linkflags += [
+      '-pthread'
+    ]
     pass
   elif compiler.target.platform == 'mac':
     pass
