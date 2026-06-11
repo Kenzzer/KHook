@@ -7,8 +7,20 @@
 namespace KHook {
 
 using namespace KHook::Asm;
-
 #define STACK_SAFETY_BUFFER 128
+
+#if defined(KHOOK_TESTS) || defined(KHOOK_DEBUG_PRINT)
+#define DEBUG_PRINT(...) \
+	printf(__VA_ARGS__);
+#define DEBUG_ABORT_PRINT(...) \
+	printf(__VA_ARGS__); \
+	fflush(stdout); \
+	::std::this_thread::sleep_for(std::chrono::milliseconds(5)); \
+	::std::abort();
+#else
+#define DEBUG_PRINT(...)
+#define DEBUG_ABORT_PRINT(...) ::std::abort();
+#endif
 
 #ifdef KHOOK_X64
 #define FUNCTION_ATTRIBUTE_PREFIX(ret) ret
@@ -89,7 +101,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) RecursiveLockUnlockShared(std::shared_mut
 		}
 	} else {
 		if (it->second == 0) {
-			std::abort();
+			DEBUG_ABORT_PRINT("Recursive mutex for detour was unlocked too many times!\n")
 		}
 
 		it->second--;
@@ -100,8 +112,8 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) RecursiveLockUnlockShared(std::shared_mut
 	}
 }
 
-enum class CallOriginalState : std::uint16_t {
-	NotReady,
+enum class CallOriginalState : std::uintptr_t {
+	NotReady = 50,
 	InProgress,
 	Complete,
 	CompleteSkipped
@@ -157,14 +169,14 @@ static thread_local AsmLoopDetails g_last_loop;
 static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_callback) FUNCTION_ATTRIBUTE_SUFFIX {
 	if (g_saved_params.top() != loop || g_is_in_recall) {
 		// Something went horribly wrong with the stack
-		std::abort();
+		DEBUG_ABORT_PRINT("Call stack is corrupted!\n")
 	}
 	
 	if (no_callback) {
 		if (loop->recall_count != 0) {
 			// If this is a recall, and we somehow have no callback then something horribly wrong happened
 			// Terminate the program right now
-			std::abort();
+			DEBUG_ABORT_PRINT("A detour recall happened with no callbacks!\n")
 		}
 		RecursiveLockUnlockShared(&loop->capsule->_detour_mutex, false);
 		// Detour was early ended, unlock the mutex and pop the asm details
@@ -175,8 +187,8 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_c
 
 		// Ensure the original function was skipped OR executed, no in-between state
 		if (loop->original_call_state != CallOriginalState::Complete
-		|| loop->original_call_state != CallOriginalState::CompleteSkipped) {
-			std::abort();
+		&& loop->original_call_state != CallOriginalState::CompleteSkipped) {
+			DEBUG_ABORT_PRINT("Detour was left in unknown state %d\n", loop->original_call_state)
 		}
 
 		if (loop->recall_count != 0) {
@@ -206,7 +218,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 
 		if (capsule != loop->capsule) {
 			// Not the same detour somehow
-			std::abort();
+			DEBUG_ABORT_PRINT("Different detour capsule (should be impossible)!\n")
 		}
 
 		if (loop->pre_loop_over == false) {
@@ -227,7 +239,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 			}
 		} else {
 			// A recall happened outside of a hook
-			std::abort();
+			DEBUG_ABORT_PRINT("Recall outside hook callbacks!\n")
 		}
 
 
@@ -354,8 +366,7 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 	if (original) {
 		// Save original value
 		if (loop->original_call_state != CallOriginalState::InProgress) {
-			// Value has already been saved, what the fuck
-			std::abort();
+			DEBUG_ABORT_PRINT("Attempting to save original return value, outside of original call window!\n")
 		}
 		if (return_size != 0) {
 			auto new_return = new std::uint8_t[return_size];
@@ -377,9 +388,8 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 			// Free it
 			delete[] reinterpret_cast<std::uint8_t*>(loop->override_return_ptr);
 
-			if (return_size != 0) {
-				// What are you doing ?????
-				std::abort();
+			if (return_size == 0) {
+				DEBUG_ABORT_PRINT("Attempting to save a 0 sized return value as override!\n")
 			}
 		}
 		if (return_size != 0) {
@@ -522,9 +532,7 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	_jit_func_ptr(0),
 	_original_function(0),
 	_stack_size(((stack_size + 0xF) & ~0xF)) {
-#if defined(KHOOK_TESTS) || defined(KHOOK_DEBUG_PRINT)
-	printf("DetourCapsule::ctor(%hd)\n", _stack_size);
-#endif
+	DEBUG_PRINT("DetourCapsule::ctor(_stack_size: %hd)\n", _stack_size)
 
 	// Because we want to be call agnostic we must get clever
 	// No register can be used to call a function, so here's the plan
@@ -874,7 +882,7 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	// RBP which we have set much earlier still contains our local variables
 	// it should have been saved across all calls as per linux & win callconvs
 	_jit.mov(rax, rbp(offsetof(AsmLoopDetails, original_call_state)));
-	_jit.cmp(rax, (std::uint32_t)CallOriginalState::NotReady);
+	_jit.cmp(rax, (std::int32_t)CallOriginalState::NotReady);
 	_jit.jne(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
 		_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::CompleteSkipped);
 		_jit.mov(rax, rbp(offsetof(AsmLoopDetails, action)));
@@ -899,6 +907,7 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 			_jit.rewrite(make_pre_call_return - sizeof(std::uint32_t), _jit.get_outputpos());
 			peek_rsp(_jit);
 			peek_rbp(_jit);
+			_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::Complete);
 		}
 		_jit.rewrite<std::int32_t>(if_not_supersede - sizeof(std::int32_t), _jit.get_outputpos() - if_not_supersede);
 	}
@@ -1300,8 +1309,7 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	// RBP which we have set much earlier still contains our local variables
 	// it should have been saved across all calls as per linux & win callconvs
 	_jit.mov(eax, ebp(offsetof(AsmLoopDetails, original_call_state)));
-	_jit.cmp(eax, (std::uint32_t)CallOriginalState::NotReady);
-	_jit.test(eax, eax);
+	_jit.cmp(eax, (std::int32_t)CallOriginalState::NotReady);
 	_jit.jne(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
 		_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::CompleteSkipped);
 		_jit.mov(eax, ebp(offsetof(AsmLoopDetails, action)));
@@ -1327,6 +1335,7 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 			_jit.rewrite(make_pre_call_return - sizeof(std::uint32_t), _jit.get_outputpos());
 			peek_rsp(_jit);
 			peek_rbp(_jit);
+			_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::Complete);
 		}
 		_jit.rewrite<std::int32_t>(if_not_supersede - sizeof(std::int32_t), _jit.get_outputpos() - if_not_supersede);
 	}
