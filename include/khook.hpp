@@ -375,6 +375,13 @@ KHOOK_API void* GetOverrideValuePtr();
 KHOOK_API void* GetCurrentValuePtr(bool pop = false);
 
 /**
+ * Thread local function, only to be called under KHook callbacks. It informs whether or not the original function was skipped.
+ *
+ * @return True if skipped, false otherwise. Behaviour is undefined if called outside POST callbacks.
+ */
+KHOOK_API bool WasOriginalFunctionSkipped();
+
+/**
  * Thread local function, only to be called when the hook callbacks loop is over, any earlier will cause undefined behaviour.
  *
  * @return

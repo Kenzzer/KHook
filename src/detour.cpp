@@ -100,12 +100,19 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) RecursiveLockUnlockShared(std::shared_mut
 	}
 }
 
+enum class CallOriginalState : std::uint16_t {
+	NotReady,
+	InProgress,
+	Complete,
+	CompleteSkipped
+};
+
 struct AsmLoopDetails {
 	// Current iterated hook
 	std::uintptr_t linked_list_it;
 	std::uintptr_t pre_loop_started;
 	std::uintptr_t pre_loop_over;
-	std::uintptr_t original_call_over;
+	CallOriginalState original_call_state;
 	std::uintptr_t post_loop_over;
 	std::uintptr_t post_loop_started;
 	std::uintptr_t recall_count;
@@ -116,7 +123,7 @@ struct AsmLoopDetails {
 	// These will be used to perform the return
 	std::uintptr_t fn_make_return;
 	// The hook that performed the original call
-	std::uintptr_t fn_make_call_original;
+	std::uintptr_t fn_make_call_original
 	// The original return value ptr
 	std::uintptr_t original_return_ptr;
 	std::uintptr_t original_delete_operator;
@@ -165,6 +172,13 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_c
 	} else {
 		// Natural end of a detour, setup everything because AsmLoopDetails is about to go invalid (due to stack being freed)
 		g_last_loop = *loop;
+
+		// Ensure the original function was skipped OR executed, no in-between state
+		if (loop->original_call_state != CallOriginalState::Complete
+		|| loop->original_call_state != CallOriginalState::CompleteSkipped) {
+			std::abort();
+		}
+
 		if (loop->recall_count != 0) {
 			RecursiveLockUnlockShared(&loop->capsule->_detour_mutex, false);
 		}
@@ -203,10 +217,6 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 			if (loop->linked_list_it == 0x0) {
 				loop->pre_loop_over = true;
 			}
-		} else if (loop->original_call_over == false) {
-			// Recall happened in the original call, this is technically impossible
-			// But we're going to support it anywways, this will avoid infinite-loops
-			loop->original_call_over = true;
 		} else if (loop->post_loop_over == false) {
 			// Recall happened in a post-loop, move to next iterator
 			auto hook = reinterpret_cast<DetourCapsule::LinkedList*>(loop->linked_list_it);
@@ -233,7 +243,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 		new_loop->linked_list_it = 0x0;
 		new_loop->pre_loop_over = false;
 		new_loop->pre_loop_started = false;
-		new_loop->original_call_over = false;
+		new_loop->original_call_state = CallOriginalState::NotReady;
 		new_loop->post_loop_over = false;
 		new_loop->post_loop_started = false;
 		new_loop->recall_count = 0;
@@ -343,7 +353,7 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 	auto loop = g_saved_params.top();
 	if (original) {
 		// Save original value
-		if (loop->original_return_ptr != 0) {
+		if (loop->original_call_state != CallOriginalState::InProgress) {
 			// Value has already been saved, what the fuck
 			std::abort();
 		}
@@ -355,6 +365,7 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 			init_copy_return fn = reinterpret_cast<init_copy_return>(init_op);
 			(*fn)(new_return, ptr_to_return);
 		}
+		loop->original_call_state = CallOriginalState::Complete;
 	}
 	if (action > (KHook::Action)loop->action) {
 		loop->action = (std::uintptr_t)action;
@@ -442,6 +453,10 @@ KHOOK_API void* GetCurrentValuePtr(bool pop) {
 			return reinterpret_cast<void*>(loop->original_return_ptr);
 		}
 	}
+}
+
+KHOOK_API bool WasOriginalFunctionSkipped() {
+	return g_saved_params.top()->original_call_state == CallOriginal::CompleteSkipped;
 }
 
 /*void memcpy_detour(std::uintptr_t dst, std::uintptr_t src, std::uintptr_t size) {
@@ -858,13 +873,15 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	// Call original (maybe)
 	// RBP which we have set much earlier still contains our local variables
 	// it should have been saved across all calls as per linux & win callconvs
-	_jit.mov(rax, rbp(offsetof(AsmLoopDetails, original_call_over)));
-	_jit.test(rax, rax);
-	_jit.jnz(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+	_jit.mov(rax, rbp(offsetof(AsmLoopDetails, original_call_state)));
+	_jit.cmp(rax, (std::uint32_t)CallOriginalState::NotReady);
+	_jit.jne(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+		_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::CompleteSkipped);
 		_jit.mov(rax, rbp(offsetof(AsmLoopDetails, action)));
 		_jit.cmp(rax, (std::int32_t)Action::Supersede);
 		_jit.je(INT32_MAX);
 		auto if_not_supersede = _jit.get_outputpos(); {
+			_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::InProgress);
 			// MAKE ORIGINAL CALL
 			_jit.mov(rax, reinterpret_cast<std::uintptr_t>(&_jit_func_ptr));
 			_jit.mov(rax, rax());
@@ -886,8 +903,6 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 		_jit.rewrite<std::int32_t>(if_not_supersede - sizeof(std::int32_t), _jit.get_outputpos() - if_not_supersede);
 	}
 	_jit.rewrite<std::int32_t>(jnz - sizeof(std::int32_t), _jit.get_outputpos() - jnz);}
-	// Call original is over
-	_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_over)), true);
 
 	//print_register(_jit, rbp, "POST-RBP");
 	// Prelude to POST LOOP
@@ -1284,13 +1299,16 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	// Call original (maybe)
 	// RBP which we have set much earlier still contains our local variables
 	// it should have been saved across all calls as per linux & win callconvs
-	_jit.mov(eax, ebp(offsetof(AsmLoopDetails, original_call_over)));
+	_jit.mov(eax, ebp(offsetof(AsmLoopDetails, original_call_state)));
+	_jit.cmp(eax, (std::uint32_t)CallOriginalState::NotReady);
 	_jit.test(eax, eax);
-	_jit.jnz(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+	_jit.jne(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+		_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::CompleteSkipped);
 		_jit.mov(eax, ebp(offsetof(AsmLoopDetails, action)));
 		_jit.cmp(eax, (std::int32_t)Action::Supersede);
 		_jit.je(INT32_MAX);
 		auto if_not_supersede = _jit.get_outputpos(); {
+			_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::InProgress);
 			// MAKE ORIGINAL CALL
 			_jit.mov(eax, reinterpret_cast<std::uintptr_t>(&_jit_func_ptr));
 			_jit.mov(eax, eax());
@@ -1313,8 +1331,6 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 		_jit.rewrite<std::int32_t>(if_not_supersede - sizeof(std::int32_t), _jit.get_outputpos() - if_not_supersede);
 	}
 	_jit.rewrite<std::int32_t>(jnz - sizeof(std::int32_t), _jit.get_outputpos() - jnz);}
-	// Call original is over
-	_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_over)), true);
 
 	// Prelude to POST LOOP
 	// Hooks with a post callback are enqueued at the end of linked list
