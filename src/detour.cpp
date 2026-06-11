@@ -123,7 +123,7 @@ struct AsmLoopDetails {
 	// These will be used to perform the return
 	std::uintptr_t fn_make_return;
 	// The hook that performed the original call
-	std::uintptr_t fn_make_call_original
+	std::uintptr_t fn_make_call_original;
 	// The original return value ptr
 	std::uintptr_t original_return_ptr;
 	std::uintptr_t original_delete_operator;
@@ -456,7 +456,7 @@ KHOOK_API void* GetCurrentValuePtr(bool pop) {
 }
 
 KHOOK_API bool WasOriginalFunctionSkipped() {
-	return g_saved_params.top()->original_call_state == CallOriginal::CompleteSkipped;
+	return g_saved_params.top()->original_call_state == CallOriginalState::CompleteSkipped;
 }
 
 /*void memcpy_detour(std::uintptr_t dst, std::uintptr_t src, std::uintptr_t size) {
