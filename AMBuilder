@@ -8,7 +8,8 @@ def AddSourceFilesFromDir(path, files):
 
 libkhook = builder.StaticLibraryProject('khook')
 libkhook.sources = AddSourceFilesFromDir(os.path.join(builder.currentSourcePath, 'src'),[
-  "detour.cpp"
+  "detour.cpp",
+  "ranges.cpp"
 ])
 
 for compiler in KHook.all_targets:

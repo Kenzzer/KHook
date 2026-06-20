@@ -279,6 +279,18 @@ KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t 
  */
 KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original);
 
+/**
+ * Lookup a bytes sequence (signature) in a given address block. This takes into account any detour that might have been created by the framework,
+ * and ensure that the compared bytes are the original bytes.
+ * 
+ * @param start Start address of the memory block to search.
+ * @param size Size in bytes of the memory block to search.
+ * @param signature Byte sequence in the format of "0F A2 28 ?? EA" (IDA bytes sequence format), where ?? signifies a wildcard byte.
+ *
+ * @return An address if lookup succeeded. nullptr otherwise.
+ */
+KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature);
+
 template<typename TYPE>
 void init_operator(TYPE* assignee, TYPE* value) {
 	new (assignee) TYPE(*value);
@@ -616,7 +628,7 @@ protected:
 		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
-			ExtractMFP(&Self::_KHook_RemovedHook),
+			(void*)Self::_KHook_RemovedHook,
 			(void*)Self::_KHook_Callback_PRE, // preMFP
 			(void*)Self::_KHook_Callback_POST, // postMFP
 			(void*)Self::_KHook_MakeReturn, // returnMFP,
@@ -648,11 +660,13 @@ protected:
 	HookID_t _associated_hook_id;
 	const void* _hooked_addr;
 	// Called by KHook
-	void _KHook_RemovedHook(HookID_t id) {
-		std::lock_guard guard(_hooks_stored);
-		_hook_ids.erase(id);
-		if (id == _associated_hook_id) {
-			_associated_hook_id = INVALID_HOOK;
+	static void _KHook_RemovedHook(HookID_t id) {
+		auto ctx = reinterpret_cast<Self*>(KHook::GetContext());
+
+		std::lock_guard guard(ctx->_hooks_stored);
+		ctx->_hook_ids.erase(id);
+		if (id == ctx->_associated_hook_id) {
+			ctx->_associated_hook_id = INVALID_HOOK;
 		}
 	}
 
@@ -1251,10 +1265,10 @@ protected:
 			return_size = sizeof(RETURN);
 		}
 
-		_associated_hook_id = SetupHook(
+		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
-			ExtractMFP(&Self::_KHook_RemovedHook),
+			(void*)&Self::_KHook_RemovedHook,
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
@@ -1287,11 +1301,13 @@ protected:
 	const void* _hooked_addr;
 
 	// Called by KHook
-	void _KHook_RemovedHook(HookID_t id) {
-		std::lock_guard guard(_hooks_stored);
-		_hook_ids.erase(id);
-		if (id == _associated_hook_id) {
-			_associated_hook_id = INVALID_HOOK;
+	static void _KHook_RemovedHook(HookID_t id) {
+		auto ctx = reinterpret_cast<Self*>(KHook::GetContext());
+
+		std::lock_guard guard(ctx->_hooks_stored);
+		ctx->_hook_ids.erase(id);
+		if (id == ctx->_associated_hook_id) {
+			ctx->_associated_hook_id = INVALID_HOOK;
 		}
 	}
 
@@ -1887,11 +1903,13 @@ protected:
 	std::unordered_set<void**> _hooked_global;
 
 	// Called by KHook
-	void _KHook_RemovedHook(HookID_t id) {
-		std::lock_guard guard(_hooks_stored);
-		auto it = _hook_ids_addr.find(id);
-		if (it != _hook_ids_addr.end()) {
-			_addr_hook_ids.erase(it->second);
+	static void _KHook_RemovedHook(HookID_t id) {
+		auto ctx = reinterpret_cast<Self*>(KHook::GetContext());
+
+		std::lock_guard guard(ctx->_hooks_stored);
+		auto it = ctx->_hook_ids_addr.find(id);
+		if (it != ctx->_hook_ids_addr.end()) {
+			ctx->_addr_hook_ids.erase(it->second);
 		}
 	}
 
@@ -1918,7 +1936,7 @@ protected:
 			vtable,
 			_vtbl_index,
 			this,
-			ExtractMFP(&Self::_KHook_RemovedHook),
+			(void*)&Self::_KHook_RemovedHook,
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
@@ -2140,6 +2158,7 @@ public:
 	virtual void* FindOriginalVirtual(void** vtable, int index) = 0;
 	virtual void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op) = 0;
 	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) = 0;
+	virtual void* LookupSignature(void* start, std::size_t size, const char* signature) = 0;
 };
 #ifndef KHOOK_STANDALONE
 // KHOOK is exposed by something
@@ -2215,6 +2234,10 @@ KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t 
 
 KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) {
 	return __exported__khook->SaveReturnValue(action, ptr_to_return, return_size, init_op, deinit_op, original);
+}
+
+KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature) {
+	return __exported__khook->LookupSignature(start, size, signature);
 }
 
 #endif

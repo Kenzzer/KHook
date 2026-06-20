@@ -1,4 +1,5 @@
 #include "detour.hpp"
+#include "ranges.hpp"
 
 #include <stack>
 #include <iostream>
@@ -1428,8 +1429,12 @@ DetourCapsule::~DetourCapsule() {
 	// Iterate through all existing hooks and kill them
 	for (auto& callback : _callbacks) {
 		auto& hook = callback.second;
-		auto mfp = KHook::BuildMFP<void (EmptyClass::*)(HookID_t)>(reinterpret_cast<void*>(hook->hook_fn_remove));
-		(((EmptyClass*)(hook->hook_ptr))->*mfp)(callback.first);
+		if (hook->hook_fn_remove) {
+			auto fn = reinterpret_cast<void (*)(HookID_t)>(hook->hook_fn_remove);
+			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), true);
+			fn(callback.first);
+			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), false);
+		}
 	}
 	_callbacks.clear();
 	_start_callbacks = nullptr;
@@ -1503,7 +1508,7 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 
 		auto linked_it = _start_callbacks;
 		while (linked_it != hook) {
-			 linked_it = linked_it->next;
+			linked_it = linked_it->next;
 		}
 		
 		if (linked_it->prev) {
@@ -1522,8 +1527,12 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 		
 		_callbacks.erase(it);
 
-		auto mfp = BuildMFP<void (EmptyClass::*)(HookID_t)>(reinterpret_cast<void*>(hook->hook_fn_remove));
-		(((EmptyClass*)(hook->hook_ptr))->*mfp)(id);
+		if (hook->hook_fn_remove) {
+			auto fn = reinterpret_cast<void (*)(HookID_t)>(hook->hook_fn_remove);
+			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), true);
+			fn(id);
+			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), false);
+		}
 	}
 }
 
@@ -1778,11 +1787,15 @@ KHOOK_API void RemoveHook(
 				g_associated_hooks.erase(id);
 			}
 
-			// Invoke remove callback
 			auto& hook = it->second;
-			auto mfp = ::KHook::BuildMFP<void (EmptyClass::*)(HookID_t)>(reinterpret_cast<void*>(hook.hook_fn_remove));
-			(((EmptyClass*)(hook.hook_ptr))->*mfp)(id);
-			return;
+
+			// Invoke remove callback
+			if (hook.hook_fn_remove) {
+				auto fn = reinterpret_cast<void (*)(HookID_t)>(hook.hook_fn_remove);
+				PushPopCurrentHook(reinterpret_cast<void*>(hook.hook_ptr), true);
+				fn(id);
+				PushPopCurrentHook(reinterpret_cast<void*>(hook.hook_ptr), false);
+			}
 		}
 	}
 
@@ -1837,6 +1850,10 @@ KHOOK_API void* FindOriginalVirtual(void** vtable, int index) {
 	}
 	// No associated detours, so this is already original function
 	return vtable[index];
+}
+
+KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature) {
+	return reinterpret_cast<void*>(KHook::Ranges::Lookup(reinterpret_cast<std::uintptr_t>(start), size, std::string(signature)));
 }
 
 }

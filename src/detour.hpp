@@ -18,6 +18,7 @@
 #include <condition_variable>
 #include <thread>
 
+#include "ranges.hpp"
 #include "safetyhook.hpp"
 
 #ifdef KHOOK_X64
@@ -79,8 +80,10 @@ namespace KHook {
 		}
 
 		bool SetupAddress(void* detour_address) {
+			auto range = std::make_unique<Ranges::Range>(reinterpret_cast<std::uintptr_t>(detour_address), reinterpret_cast<std::uintptr_t>(detour_address) + 0xA);
+
 			auto result = safetyhook::InlineHook::create(detour_address, _jit_func_ptr);
-			if (result) {
+			if (result && Ranges::Add(std::move(range))) {
 				// Successfully detour'd the function
 				_safetyhook = std::move(result.value());
 				_original_function = reinterpret_cast<std::uintptr_t>(_safetyhook.original<void*>());
