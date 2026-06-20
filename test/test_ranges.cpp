@@ -164,7 +164,7 @@ public:
     bool Lookup() {
         auto regions = GetReadableRegions();
         for (const auto& region : regions) {
-            auto ptr = KHook::LookupSignature(reinterpret_cast<void*>(region.start), reinterpret_cast<std::size_t>(region.end - region.start), _signature);
+            auto ptr = KHook::LookupSignature(reinterpret_cast<void*>(region.start), static_cast<std::size_t>(region.end - region.start), _signature);
             if (_function == ptr) {
                 std::cout << "Function lookup success!" << std::endl;
                 return true;
