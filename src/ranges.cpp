@@ -24,7 +24,7 @@ bool Add(std::unique_ptr<Range> range) {
 	g_ranges.begin(),
 	g_ranges.end(),
 	range->begin,
-	[](const std::unique_ptr<Range>& r, uint32_t value) {
+	[](const std::unique_ptr<Range>& r, std::uintptr_t value) {
 		return r->begin < value;
 	});
 
