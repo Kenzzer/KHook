@@ -1524,14 +1524,17 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 		if (hook == _end_callbacks) {
 			_end_callbacks = _end_callbacks->prev;
 		}
-		
+
+		auto remove_fn = hook->hook_fn_remove;
+		auto ctx_ptr = hook->hook_ptr;
+
 		_callbacks.erase(it);
 
-		if (hook->hook_fn_remove) {
-			auto fn = reinterpret_cast<void (*)(HookID_t)>(hook->hook_fn_remove);
-			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), true);
+		if (remove_fn) {
+			auto fn = reinterpret_cast<void (*)(HookID_t)>(remove_fn);
+			PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), true);
 			fn(id);
-			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), false);
+			PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), false);
 		}
 	}
 }
