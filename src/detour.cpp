@@ -1781,7 +1781,10 @@ KHOOK_API void RemoveHook(
 				continue;
 			}
 
-			// Hook not yet been inserted, remove it right now
+			// Hook not yet been inserted, remove it right now.
+			// Capture the remove-callback details before erase frees the node.
+			auto remove_fn = it->second.hook_fn_remove;
+			auto ctx_ptr = it->second.hook_ptr;
 			g_insert_hooks.erase(it);
 
 			// Disassociate from the detour
@@ -1790,15 +1793,14 @@ KHOOK_API void RemoveHook(
 				g_associated_hooks.erase(id);
 			}
 
-			auto& hook = it->second;
-
 			// Invoke remove callback
-			if (hook.hook_fn_remove) {
-				auto fn = reinterpret_cast<void (*)(HookID_t)>(hook.hook_fn_remove);
-				PushPopCurrentHook(reinterpret_cast<void*>(hook.hook_ptr), true);
+			if (remove_fn) {
+				auto fn = reinterpret_cast<void (*)(HookID_t)>(remove_fn);
+				PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), true);
 				fn(id);
-				PushPopCurrentHook(reinterpret_cast<void*>(hook.hook_ptr), false);
+				PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), false);
 			}
+			break;
 		}
 	}
 
