@@ -48,25 +48,6 @@ bool Add(std::unique_ptr<Range> range) {
     return true;
 }
 
-bool IsIn(std::uintptr_t value) {
-	std::shared_lock lock(g_mutex);
-
-	auto it = std::upper_bound(
-	g_ranges.begin(),
-	g_ranges.end(),
-	value,
-	[](uint32_t v, const std::unique_ptr<Range>& r) {
-		return v < r->begin;
-	});
-
-	if (it == g_ranges.begin()) {
-		return false;
-	}
-
-	--it;
-	return value <= (*it)->end;
-}
-
 std::uintptr_t Lookup(std::uintptr_t start, std::size_t size, const std::string& bytes) {
 	// Parse the bytes sequence
 	std::vector<std::uint16_t> sequence;
