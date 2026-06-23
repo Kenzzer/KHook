@@ -1414,7 +1414,6 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	//_jit.breakpoint();
 	_jit.retn();
 #endif
-	_jit.SetRE();
 	void* bridge = _jit;
 	_jit_func_ptr = reinterpret_cast<std::uintptr_t>(bridge);
 }
