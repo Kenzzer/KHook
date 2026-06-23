@@ -465,13 +465,11 @@ namespace KHook
 
 				void SetRE()
 				{
-					Memory::SetAccess(startPtr, size, Memory::Flags::READ | Memory::Flags::EXECUTE);
 					isRE = true;
 				}
 
 				void SetRW()
 				{
-					Memory::SetAccess(startPtr, size, Memory::Flags::READ | Memory::Flags::WRITE);
 					isRE = false;
 				}
 			};
@@ -496,9 +494,11 @@ namespace KHook
 					newRegion.size += m_PageSize;
 
 #ifdef _WIN32
-				newRegion.startPtr = VirtualAlloc(nullptr, newRegion.size, MEM_COMMIT, PAGE_READWRITE);
+				newRegion.startPtr = VirtualAlloc(nullptr, newRegion.size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #else
-				newRegion.startPtr = mmap(0, newRegion.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+				newRegion.startPtr = mmap(0, newRegion.size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
+				if (newRegion.startPtr == MAP_FAILED)
+					newRegion.startPtr = nullptr;
 #endif
 
 				if (newRegion.startPtr)
