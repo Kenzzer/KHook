@@ -77,7 +77,7 @@ public:
 			}
 		}
 	}
-protected:
+
 	template <typename... ARGS>
 	static constexpr std::uint32_t _copy_stack_size() {
 #ifdef _WIN64
@@ -1260,11 +1260,6 @@ protected:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
-		int return_size = 0;
-		if constexpr(!std::is_same<RETURN, void>::value) {
-			return_size = sizeof(RETURN);
-		}
-
 		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
@@ -1925,11 +1920,6 @@ protected:
 				// Already hooked so ignore
 				return;
 			}
-		}
-
-		int return_size = 0;
-		if constexpr(!std::is_same<RETURN, void>::value) {
-			return_size = sizeof(RETURN);
 		}
 
 		auto id = ::KHook::SetupVirtualHook(
