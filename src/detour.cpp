@@ -1653,12 +1653,7 @@ HookID_t __Setup__Hook(
 			g_associated_hooks[id] = it->second.get();
 		}
 
-		if (!async) {
-			if (__InsertHook_Sync(id, details) == false) {
-				// Should be impossible to fail... but if it does, async add
-				async = true;
-			}
-		}
+		async = !__InsertHook_Sync(id, details);
 
 		if (async) {
 			std::lock_guard insert_guard(g_insert_hooks_mutex);
