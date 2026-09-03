@@ -9,6 +9,7 @@
 */
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
 #include <type_traits>
 #include <unordered_set>
@@ -95,10 +96,10 @@ public:
 #else
 		std::uint32_t return_size = 0;
 		if constexpr(!std::is_void_v<RETURN>) {
-			return_size = std::max(sizeof(void*), sizeof(RETURN));
+			return_size = (std::max)(sizeof(void*), sizeof(RETURN));
 		}
 
-		return return_size + (std::max(sizeof(void*), sizeof(ARGS)) + ... + 0);
+		return return_size + ((std::max)(sizeof(void*), sizeof(ARGS)) + ... + 0);
 #endif
 	}
 protected:
