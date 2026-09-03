@@ -355,7 +355,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) PrintEntryExitRSP(std::uintptr_t rsp, boo
 }
 #endif
 
-KHOOK_API void* GetContext() {
+KHOOK_API void* GetContextPtr() {
 	return g_current_hook.top();
 }
 

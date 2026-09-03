@@ -263,7 +263,17 @@ KHOOK_API void RemoveHook(HookID_t id, bool async = false);
  *
  * @return The stored context pointer. Behaviour is undefined if called outside hook callbacks.
  */
-KHOOK_API void* GetContext();
+KHOOK_API void* GetContextPtr();
+
+/**
+ * Thread local function, only to be called under KHook callbacks. It returns the context pointer provided during SetupHook.
+ *
+ * @return The stored context pointer. Behaviour is undefined if called outside hook callbacks.
+ */
+template<typename CONTEXT>
+inline CONTEXT* GetContext() {
+	return (CONTEXT*)::KHook::GetContextPtr();
+}
 
 /**
  * Thread local function, only to be called under KHook callbacks. If called it allow for a recall of hooked function with new params.
@@ -373,6 +383,16 @@ KHOOK_API void* GetOriginalFunction();
 KHOOK_API void* GetOriginalValuePtr();
 
 /**
+ * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the original return value (if not superseded).
+ *
+ * @return The original value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+template<typename RETURN>
+inline RETURN GetOriginalReturn() {
+	return *((RETURN*)::KHook::GetOriginalValuePtr());
+}
+
+/**
  * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the override return value.
  *
  * @return The override value pointer. Behaviour is undefined if called outside POST callbacks.
@@ -380,11 +400,31 @@ KHOOK_API void* GetOriginalValuePtr();
 KHOOK_API void* GetOverrideValuePtr();
 
 /**
+ * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the override return value.
+ *
+ * @return The override value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+template<typename RETURN>
+inline RETURN GetOverrideReturn() {
+	return *((RETURN*)::KHook::GetOverrideValuePtr());
+}
+
+/**
  * Thread local function, only to be called under KHook callbacks. It returns the current pointer that KHook plans on using as return value.
  *
  * @return The override or original value pointer. Behaviour is undefined if called outside POST callbacks.
  */
 KHOOK_API void* GetCurrentValuePtr(bool pop = false);
+
+/**
+ * Thread local function, only to be called under KHook callbacks. It returns the current pointer that KHook plans on using as return value.
+ *
+ * @return The override or original value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+template<typename RETURN>
+inline RETURN GetCurrentReturn(bool pop = false) {
+	return *((RETURN*)::KHook::GetCurrentValuePtr(pop));
+}
 
 /**
  * Thread local function, only to be called under KHook callbacks. It informs whether or not the original function was skipped.
@@ -661,7 +701,7 @@ protected:
 	const void* _hooked_addr;
 	// Called by KHook
 	static void _KHook_RemovedHook(HookID_t id) {
-		auto ctx = reinterpret_cast<Self*>(KHook::GetContext());
+		auto ctx = KHook::GetContext<Self>();
 
 		std::lock_guard guard(ctx->_hooks_stored);
 		ctx->_hook_ids.erase(id);
@@ -709,7 +749,7 @@ protected:
 
 	// Called by KHook
 	static RETURN _KHook_Callback_PRE(ARGS... args) {
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(false, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -718,7 +758,7 @@ protected:
 
 	// Called by KHook
 	static RETURN _KHook_Callback_POST(ARGS... args) {
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(true, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1297,7 +1337,7 @@ protected:
 
 	// Called by KHook
 	static void _KHook_RemovedHook(HookID_t id) {
-		auto ctx = reinterpret_cast<Self*>(KHook::GetContext());
+		auto ctx = KHook::GetContext<Self>();
 
 		std::lock_guard guard(ctx->_hooks_stored);
 		ctx->_hook_ids.erase(id);
@@ -1346,7 +1386,7 @@ protected:
 	// Called by KHook
 	RETURN _KHook_Callback_PRE(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(false, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1356,7 +1396,7 @@ protected:
 	// Called by KHook
 	RETURN _KHook_Callback_POST(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(true, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1899,7 +1939,7 @@ protected:
 
 	// Called by KHook
 	static void _KHook_RemovedHook(HookID_t id) {
-		auto ctx = reinterpret_cast<Self*>(KHook::GetContext());
+		auto ctx = KHook::GetContext<Self>();
 
 		std::lock_guard guard(ctx->_hooks_stored);
 		auto it = ctx->_hook_ids_addr.find(id);
@@ -1992,7 +2032,7 @@ protected:
 	// Called by KHook
 	RETURN _KHook_Callback_PRE(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto* real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(false, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -2002,7 +2042,7 @@ protected:
 	// Called by KHook
 	RETURN _KHook_Callback_POST(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto* real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(true, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -2138,7 +2178,7 @@ public:
 	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
 	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
 	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
-	virtual void* GetContext() = 0;
+	virtual void* GetContextPtr() = 0;
 	virtual void* GetOriginalFunction() = 0;
 	virtual void* GetOriginalValuePtr() = 0;
 	virtual void* GetOverrideValuePtr() = 0;
@@ -2186,8 +2226,8 @@ KHOOK_API void RemoveHook(HookID_t id, bool async) {
 	return __exported__khook->RemoveHook(id, async);
 }
 
-KHOOK_API void* GetContext() {
-	return __exported__khook->GetContext();
+KHOOK_API void* GetContextPtr() {
+	return __exported__khook->GetContextPtr();
 }
 
 KHOOK_API void* GetOriginalFunction() {
