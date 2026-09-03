@@ -5,12 +5,14 @@ on:
     branches: [ master ]
   pull_request:
     branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   build:
     strategy:
       matrix:
         os: [ubuntu-latest, windows-latest]
+        arch: [x86, x86_64]
         include:
           - os: ubuntu-latest
             cc: clang
@@ -19,7 +21,7 @@ jobs:
             cc: msvc
       fail-fast: false
 
-    name: ${{ matrix.os }} - ${{ matrix.cc }}
+    name: ${{ matrix.os }} - ${{ matrix.cc }} (${{ matrix.arch }})
     runs-on: ${{ matrix.os }}
 
     steps:
@@ -42,18 +44,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: Repository checkout
         with:
           fetch-depth: 0
           submodules: recursive
           path: repository
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         name: AMBuild checkout
         with:
           repository: alliedmodders/ambuild
-          ref: fe8c99ccd24fa926bf6ac6b9935a5fc03df06a72
+          ref: 25a23ac92307eb1e181fd3e7d9385412d4034532
           fetch-depth: 0
           submodules: recursive
           path: ambuild
@@ -61,7 +63,6 @@ jobs:
       - name: Setup AMBuild
         shell: bash
         run: |
-          cd "${{ env.CACHE_PATH }}"
           python -m pip install ./ambuild
 
       - name: Select clang compiler
@@ -78,5 +79,11 @@ jobs:
         run: |
           mkdir build
           cd build
-          python ../configure.py
+          python ../configure.py --targets ${{ matrix.arch }} --enable-tests
           ambuild
+      
+      - name: Test
+        shell: bash
+        working-directory: repository
+        run: |
+          python ./test.py --target ${{ matrix.arch }} --skip-build

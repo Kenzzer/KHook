@@ -9,7 +9,9 @@
 */
 #pragma once
 
+#include <algorithm>
 #include <cstdint>
+#include <type_traits>
 #include <unordered_set>
 #include <unordered_map>
 #include <iostream>
@@ -61,6 +63,8 @@ struct Return<void> {
 };
 
 class __Hook {
+public:
+	virtual ~__Hook() = default;
 };
 
 template<typename RETURN>
@@ -73,6 +77,30 @@ public:
 				delete _fake_return;
 			}
 		}
+	}
+
+	template <typename... ARGS>
+	static constexpr std::uint32_t _copy_stack_size() {
+#ifdef _WIN64
+		std::uint32_t num_args = sizeof...(ARGS);
+		if constexpr(!std::is_void_v<RETURN>) {
+			// Return value can be inserted as first arg as pointer to caller-alloc'd buffer 
+			// (i.e., size != 1,2,4,8 or not C++03 POD).
+			// Add +1 to cover this case even if the return value doesn't end up being pushed
+			// as an arg, better to copy more than not enough.
+			num_args += 1;
+		}
+
+		std::uint32_t num_stack_args = (num_args <= 4) ? 0 : (num_args - 4);
+		return num_stack_args * 8 + 32;
+#else
+		std::uint32_t return_size = 0;
+		if constexpr(!std::is_void_v<RETURN>) {
+			return_size = (std::max)(sizeof(void*), sizeof(RETURN));
+		}
+
+		return return_size + ((std::max)(sizeof(void*), sizeof(ARGS)) + ... + 0);
+#endif
 	}
 protected:
 	RETURN* _fake_return = nullptr;
@@ -93,47 +121,102 @@ using __mfp_const__ = RETURN (CLASS::*)(ARGS...) const;
 template<typename CLASS, typename RETURN, typename... ARGS>
 using __mfp__ = RETURN (CLASS::*)(ARGS...);
 
-template<typename C, typename R, typename... A>
-inline __mfp__<C, R, A...> BuildMFP(void* addr) {
+template<typename FUNC>
+inline FUNC BuildMFP(const void* addr) {
+	static_assert(std::is_member_function_pointer<FUNC>::value, "Error: FUNC is not a member function pointer!");
 	union {
-		R (C::*mfp)(A...);
-		struct {
-			void* addr;
-#ifdef _WIN32
-#else
-			intptr_t adjustor;
-#endif
-		} details;
-	} open;
-
-	open.details.addr = addr;
-#ifdef _WIN32
-#else
-	open.details.adjustor = 0;
-#endif
-	return open.mfp;
-}
-
-template<typename C, typename R, typename... A>
-inline __mfp_const__<C, R, A...> BuildMFP(const void* addr) {
-	union {
-		R (C::*mfp)(A...) const;
+		FUNC mfp;
 		struct {
 			const void* addr;
-#ifdef _WIN32
-#else
-			intptr_t adjustor;
-#endif
+			intptr_t chunks[3];
 		} details;
 	} open;
 
 	open.details.addr = addr;
-#ifdef _WIN32
-#else
-	open.details.adjustor = 0;
-#endif
+
+	
+	if constexpr(sizeof(FUNC) >= 2 * sizeof(void*)) {
+		open.details.chunks[0] = 0;
+	}
+
+	if constexpr(sizeof(FUNC) >= 3 * sizeof(void*)) {
+		open.details.chunks[1] = 0;
+	}
+
+	if constexpr(sizeof(FUNC) >= 4 * sizeof(void*)) {
+		open.details.chunks[2] = 0;
+	}
 	return open.mfp;
 }
+
+template<typename FUNC>
+inline void FillMFP(FUNC* mfp, void* addr) {
+	static_assert(std::is_member_function_pointer<FUNC>::value, "Error: FUNC is not a member function pointer!");
+	union open {
+		FUNC mfp;
+		struct {
+			void* addr;
+			intptr_t chunks[3];
+		} details;
+	};
+
+	((open*)mfp)->details.addr = addr;
+
+	if constexpr(sizeof(FUNC) >= 2 * sizeof(void*)) {
+		((open*)mfp)->details.chunks[0] = 0;
+	}
+
+	if constexpr(sizeof(FUNC) >= 3 * sizeof(void*)) {
+		((open*)mfp)->details.chunks[1] = 0;
+	}
+
+	if constexpr(sizeof(FUNC) >= 4 * sizeof(void*)) {
+		((open*)mfp)->details.chunks[2] = 0;
+	}
+}
+
+template<typename FUNC>
+inline void* ExtractMFP(FUNC mfp) {
+	static_assert(std::is_member_function_pointer<FUNC>::value, "Error: FUNC is not a member function pointer!");
+	union {
+		FUNC mfp;
+		struct {
+			void* addr;
+			intptr_t chunks[4];
+		} details;
+	} open;
+
+	open.mfp = mfp;
+	return open.details.addr;
+}
+
+template<typename T>
+struct __internal__member_function_class;
+
+#define __INTERNAL__KHOOK_MAKE_TRAIT(...) \
+template<typename R, typename C, typename... Args> \
+struct __internal__member_function_class<R(C::*)(Args...) __VA_ARGS__> \
+{ \
+    using type = C; \
+};
+
+__INTERNAL__KHOOK_MAKE_TRAIT()
+__INTERNAL__KHOOK_MAKE_TRAIT(const)
+__INTERNAL__KHOOK_MAKE_TRAIT(volatile)
+__INTERNAL__KHOOK_MAKE_TRAIT(const volatile)
+
+__INTERNAL__KHOOK_MAKE_TRAIT(&)
+__INTERNAL__KHOOK_MAKE_TRAIT(const &)
+__INTERNAL__KHOOK_MAKE_TRAIT(volatile &)
+__INTERNAL__KHOOK_MAKE_TRAIT(const volatile &)
+
+__INTERNAL__KHOOK_MAKE_TRAIT(&&)
+__INTERNAL__KHOOK_MAKE_TRAIT(const &&)
+__INTERNAL__KHOOK_MAKE_TRAIT(volatile &&)
+__INTERNAL__KHOOK_MAKE_TRAIT(const volatile &&)
+
+__INTERNAL__KHOOK_MAKE_TRAIT(noexcept)
+__INTERNAL__KHOOK_MAKE_TRAIT(const noexcept)
 
 /**
  * Creates a hook around the given function address.
@@ -145,10 +228,11 @@ inline __mfp_const__<C, R, A...> BuildMFP(const void* addr) {
  * @param post Function to call with the original this ptr (if any), after the hooked function is called.
  * @param make_return Function to call with the original this ptr (if any), to make the final return value.
  * @param make_call_original Function to call with the original this ptr (if any), to call the original function and store the return value if needed.
+ * @param stack_size Size of the stack in bytes for the detoured function.
  * @param async By default set to false. If set to true, the hook will be added synchronously. Beware if performed while the hooked function is processing this could deadlock.
  * @return The created hook id on success, INVALID_HOOK otherwise.
  */
-KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false);
+KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false);
 
 /**
  * Creates a hook around the given function retrieved from a vtable.
@@ -161,10 +245,11 @@ KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_functi
  * @param post Function to call with the original this ptr (if any), after the hooked function is called.
  * @param make_return Function to call with the original this ptr (if any), to make the final return value.
  * @param make_call_original Function to call with the original this ptr (if any), to call the original function and store the return value if needed.
+ * @param stack_size Size of the stack in bytes for the detoured function.
  * @param async By default set to false. If set to true, the hook will be added synchronously. Beware if performed while the hooked function is processing this could deadlock.
  * @return The created hook id on success, INVALID_HOOK otherwise.
  */
-KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false);
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false);
 
 /**
  * Removes a given hook. Beware if this is performed synchronously under a hook callback this could deadlock or crash.
@@ -179,7 +264,17 @@ KHOOK_API void RemoveHook(HookID_t id, bool async = false);
  *
  * @return The stored context pointer. Behaviour is undefined if called outside hook callbacks.
  */
-KHOOK_API void* GetContext();
+KHOOK_API void* GetContextPtr();
+
+/**
+ * Thread local function, only to be called under KHook callbacks. It returns the context pointer provided during SetupHook.
+ *
+ * @return The stored context pointer. Behaviour is undefined if called outside hook callbacks.
+ */
+template<typename CONTEXT>
+inline CONTEXT* GetContext() {
+	return (CONTEXT*)::KHook::GetContextPtr();
+}
 
 /**
  * Thread local function, only to be called under KHook callbacks. If called it allow for a recall of hooked function with new params.
@@ -194,6 +289,18 @@ KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t 
  * @return
  */
 KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original);
+
+/**
+ * Lookup a bytes sequence (signature) in a given address block. This takes into account any detour that might have been created by the framework,
+ * and ensure that the compared bytes are the original bytes.
+ * 
+ * @param start Start address of the memory block to search.
+ * @param size Size in bytes of the memory block to search.
+ * @param signature Byte sequence in the format of "0F A2 28 ?? EA" (IDA bytes sequence format), where ?? signifies a wildcard byte.
+ *
+ * @return An address if lookup succeeded. nullptr otherwise.
+ */
+KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature);
 
 template<typename TYPE>
 void init_operator(TYPE* assignee, TYPE* value) {
@@ -237,45 +344,28 @@ inline void __internal__savereturnvalue(const ::KHook::Return<RETURN> &ret, bool
 	::KHook::SaveReturnValue(ret.action, return_ptr, size, init_op, deinit_op, original);
 }
 
-template<typename RETURN, typename ...ARGS>
-inline ::KHook::Return<RETURN> Recall(RETURN (*)(ARGS...), const ::KHook::Return<RETURN> &ret, ARGS... args) {
-	RETURN (*function)(ARGS...) = (decltype(function))::KHook::__internal__dorecall(ret);
-	(*function)(args...);
-	return ret;
+template<typename RETURN>
+inline RETURN ManualReturn(const ::KHook::Return<RETURN> &ret, bool original = false) {
+	::KHook::__internal__savereturnvalue(ret, original);
+	return ret.ret;
 }
 
-template<typename CLASS, typename RETURN, typename ...ARGS>
-inline ::KHook::Return<RETURN> Recall(RETURN (CLASS::*)(ARGS...), const ::KHook::Return<RETURN> &ret, CLASS* ptr, ARGS... args) {
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(::KHook::__internal__dorecall(ret));
-	(ptr->*mfp)(args...);
-	return ret;
+template<typename F, typename CLASS, typename ...ARGS>
+inline void __MFP__Recall(void* addr, F f, CLASS&& this_ptr, ARGS&&... args) {
+	F dummy_func = nullptr;
+	::KHook::FillMFP(&dummy_func, addr);
+	(this_ptr->*dummy_func)(std::forward<ARGS>(args)...);
 }
 
-template<typename CLASS, typename RETURN, typename ...ARGS>
-inline ::KHook::Return<RETURN> Recall(RETURN (CLASS::*)(ARGS...), const ::KHook::Return<RETURN> &ret, const CLASS* ptr, ARGS... args) {
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>((const void*)::KHook::__internal__dorecall(ret));
-	(ptr->*mfp)(args...);
-	return ret;
-}
-
-template<typename RETURN, typename ...ARGS>
-inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, ARGS... args) {
-	RETURN (*function)(ARGS...) = (decltype(function))::KHook::__internal__dorecall(ret);
-	(*function)(args...);
-	return ret;
-}
-
-template<typename CLASS, typename RETURN, typename ...ARGS>
-inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, CLASS* ptr, ARGS... args) {
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(::KHook::__internal__dorecall(ret));
-	(ptr->*mfp)(args...);
-	return ret;
-}
-
-template<typename CLASS, typename RETURN, typename ...ARGS>
-inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, const CLASS* ptr, ARGS... args) {
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>((const void*)::KHook::__internal__dorecall(ret));
-	(ptr->*mfp)(args...);
+template<typename F, typename ...ARGS>
+inline ::KHook::Return<std::invoke_result_t<F, ARGS...>> Recall(F f, const ::KHook::Return<std::invoke_result_t<F, ARGS...>> &ret, ARGS&&... args) {
+	auto addr = ::KHook::__internal__dorecall(ret);
+	if constexpr (std::is_member_function_pointer<F>::value) {
+		::KHook::__MFP__Recall(addr, f, std::forward<ARGS>(args)...);
+	} else {
+		F function = (decltype(f))addr;
+		(*function)(std::forward<ARGS>(args)...);
+	}
 	return ret;
 }
 
@@ -287,11 +377,21 @@ inline ::KHook::Return<RETURN> Recall(const ::KHook::Return<RETURN> &ret, const 
 KHOOK_API void* GetOriginalFunction();
 
 /**
- * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the original return value (if not superceded).
+ * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the original return value (if not superseded).
  *
  * @return The original value pointer. Behaviour is undefined if called outside POST callbacks.
  */
 KHOOK_API void* GetOriginalValuePtr();
+
+/**
+ * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the original return value (if not superseded).
+ *
+ * @return The original value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+template<typename RETURN>
+inline RETURN GetOriginalReturn() {
+	return *((RETURN*)::KHook::GetOriginalValuePtr());
+}
 
 /**
  * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the override return value.
@@ -301,11 +401,38 @@ KHOOK_API void* GetOriginalValuePtr();
 KHOOK_API void* GetOverrideValuePtr();
 
 /**
+ * Thread local function, only to be called under KHook callbacks. It returns a pointer containing the override return value.
+ *
+ * @return The override value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+template<typename RETURN>
+inline RETURN GetOverrideReturn() {
+	return *((RETURN*)::KHook::GetOverrideValuePtr());
+}
+
+/**
  * Thread local function, only to be called under KHook callbacks. It returns the current pointer that KHook plans on using as return value.
  *
  * @return The override or original value pointer. Behaviour is undefined if called outside POST callbacks.
  */
 KHOOK_API void* GetCurrentValuePtr(bool pop = false);
+
+/**
+ * Thread local function, only to be called under KHook callbacks. It returns the current pointer that KHook plans on using as return value.
+ *
+ * @return The override or original value pointer. Behaviour is undefined if called outside POST callbacks.
+ */
+template<typename RETURN>
+inline RETURN GetCurrentReturn(bool pop = false) {
+	return *((RETURN*)::KHook::GetCurrentValuePtr(pop));
+}
+
+/**
+ * Thread local function, only to be called under KHook callbacks. It informs whether or not the original function was skipped.
+ *
+ * @return True if skipped, false otherwise. Behaviour is undefined if called outside POST callbacks.
+ */
+KHOOK_API bool WasOriginalFunctionSkipped();
 
 /**
  * Thread local function, only to be called when the hook callbacks loop is over, any earlier will cause undefined behaviour.
@@ -340,40 +467,6 @@ KHOOK_API void* FindOriginalVirtual(void** vtable, int index);
  */
 KHOOK_API void Shutdown();
 
-template<typename C, typename R, typename... A>
-inline void* ExtractMFP(R (C::*mfp)(A...)) {
-	union {
-		R (C::*mfp)(A...);
-		struct {
-			void* addr;
-#ifdef _WIN32
-#else
-			intptr_t adjustor;
-#endif
-		} details;
-	} open;
-
-	open.mfp = mfp;
-	return open.details.addr;
-}
-
-template<typename C, typename R, typename... A>
-inline const void* ExtractMFP(R (C::*mfp)(A...) const) {
-	union {
-		R (C::*mfp)(A...) const;
-		struct {
-			const void* addr;
-#ifdef _WIN32
-#else
-			intptr_t adjustor;
-#endif
-		} details;
-	} open;
-
-	open.mfp = mfp;
-	return open.details.addr;
-}
-
 template<typename RETURN, typename... ARGS>
 class Function : public Hook<RETURN> {
 	class EmptyClass {};
@@ -386,9 +479,6 @@ public:
 	Function(fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -397,9 +487,6 @@ public:
 	Function(RETURN (*function)(ARGS...), fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -409,9 +496,6 @@ public:
 	Function(RETURN (*function)(ARGS...), fnCallback pre, std::nullptr_t) : 
 		_pre_callback(pre),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -421,9 +505,6 @@ public:
 	Function(RETURN (*function)(ARGS...), std::nullptr_t, fnCallback post) : 
 		_pre_callback(nullptr),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -434,48 +515,52 @@ public:
 	Function(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 
 	template<typename CONTEXT>
 	Function(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 	}
 
 	template<typename CONTEXT>
 	Function(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 
 	template<typename CONTEXT>
 	Function(RETURN (*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 
@@ -483,12 +568,13 @@ public:
 	Function(RETURN (*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 		Configure(function);
 	}
 
@@ -496,12 +582,13 @@ public:
 	Function(RETURN (*function)(ARGS...), CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 
@@ -518,7 +605,53 @@ public:
 		}
 	}
 
-	void Configure(const void* address) {
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void RemoveContext(CONTEXT* context) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs.erase((EmptyClass*)context);
+	}
+
+	inline void Configure(RETURN (*function)(ARGS...)) {
+		return _Configure(reinterpret_cast<const void*>(function));
+	}
+
+	RETURN CallOriginal(ARGS... args) {
+		RETURN (*function)(ARGS...) = (decltype(function))::KHook::FindOriginal((void*)_hooked_addr);
+		return (*function)(args...);
+	}
+protected:
+	inline void _Configure(void* address) {
+		return _Configure(reinterpret_cast<const void*>(address));
+	}
+
+	void _Configure(const void* address) {
 		if (address == nullptr || _in_deletion) {
 			return;
 		}
@@ -536,11 +669,12 @@ public:
 		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
-			ExtractMFP(&Self::_KHook_RemovedHook),
+			(void*)Self::_KHook_RemovedHook,
 			(void*)Self::_KHook_Callback_PRE, // preMFP
 			(void*)Self::_KHook_Callback_POST, // postMFP
 			(void*)Self::_KHook_MakeReturn, // returnMFP,
 			(void*)Self::_KHook_MakeOriginalCall, // callOriginalMFP
+			Self::template _copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (_associated_hook_id != INVALID_HOOK) {
@@ -550,25 +684,15 @@ public:
 		}
 	}
 
-	inline void Configure(void* address) {
-		return Configure(reinterpret_cast<const void*>(address));
-	}
-
-	inline void Configure(RETURN (*function)(ARGS...)) {
-		return Configure(reinterpret_cast<const void*>(function));
-	}
-
-	RETURN CallOriginal(ARGS... args) {
-		RETURN (*function)(ARGS...) = (decltype(function))::KHook::FindOriginal((void*)_hooked_addr);
-		return (*function)(args...);
-	}
-protected:
-	// Various filters to make MemberHook class useful
 	fnCallback _pre_callback;
 	fnCallback _post_callback;
-	void* _context;
-	void* _context_pre_callback;
-	void* _context_post_callback;
+
+	struct __context_details {
+		__mfp__<EmptyClass, Return<RETURN>, ARGS...> pre;
+		__mfp__<EmptyClass, Return<RETURN>, ARGS...> post;
+	};
+	std::mutex _m_context_ptrs;
+	std::unordered_map<EmptyClass*, __context_details> _context_ptrs;
 
 	bool _in_deletion;
 	std::mutex _hooks_stored;
@@ -577,30 +701,56 @@ protected:
 	HookID_t _associated_hook_id;
 	const void* _hooked_addr;
 	// Called by KHook
-	void _KHook_RemovedHook(HookID_t id) {
-		std::lock_guard guard(_hooks_stored);
-		_hook_ids.erase(id);
-		if (id == _associated_hook_id) {
-			_associated_hook_id = INVALID_HOOK;
+	static void _KHook_RemovedHook(HookID_t id) {
+		auto ctx = KHook::GetContext<Self>();
+
+		std::lock_guard guard(ctx->_hooks_stored);
+		ctx->_hook_ids.erase(id);
+		if (id == ctx->_associated_hook_id) {
+			ctx->_associated_hook_id = INVALID_HOOK;
 		}
 	}
 
 	// Fixed KHook callback
 	void _KHook_Callback_Fixed(bool post, ARGS... args) {
-		auto context_callback = (post) ? this->_context_post_callback : this->_context_pre_callback;
-		auto callback = (post) ? this->_post_callback : this->_pre_callback;
+		KHook::Return<RETURN> action;
+		action.action = KHook::Action::Ignore;
 
-		if (callback == nullptr && context_callback == nullptr) {
-			return;
+		if (post && this->_post_callback) {
+			action = (*this->_post_callback)(args...);
+		} else if (!post && this->_pre_callback) {
+			action = (*this->_pre_callback)(args...);
 		}
 
-		Return<RETURN> action = (_context) ? (((EmptyClass*)_context)->*BuildMFP<EmptyClass, Return<RETURN>, ARGS...>(context_callback))(args...) : (*callback)(args...);
+		{
+			decltype(this->_context_ptrs) copied_ctxs;
+			{
+				// This can deadlock (in case of recalls)
+				// so make a deep-copy
+				std::lock_guard guard(this->_m_context_ptrs);
+				copied_ctxs = this->_context_ptrs;
+			}
+			for (const auto& context : copied_ctxs) {
+				auto context_ptr = context.first;
+				if (post && context.second.post) {
+					auto new_action = (context_ptr->*(context.second.post))(args...);
+					if (new_action.action > action.action) {
+						action = new_action;
+					}
+				} else if (!post && context.second.pre) {
+					auto new_action = (context_ptr->*(context.second.pre))(args...);
+					if (new_action.action > action.action) {
+						action = new_action;
+					}
+				}
+			}
+		}
 		::KHook::__internal__savereturnvalue(action, false);
 	}
 
 	// Called by KHook
 	static RETURN _KHook_Callback_PRE(ARGS... args) {
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(false, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -609,7 +759,7 @@ protected:
 
 	// Called by KHook
 	static RETURN _KHook_Callback_POST(ARGS... args) {
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(true, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -656,13 +806,18 @@ public:
 	using fnCallbackConst = ::KHook::Return<RETURN> (*)(const CLASS*, ARGS...);
 	using Self = ::KHook::Member<CLASS, RETURN, ARGS...>;
 
+	Member() : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_in_deletion(false),
+		_associated_hook_id(INVALID_HOOK),
+		_hooked_addr(nullptr) {
+	}
+
 	// CTOR - No function
 	Member(fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -672,9 +827,6 @@ public:
 	Member(fnCallbackConst pre, fnCallbackConst post) : 
 		_pre_callback(reinterpret_cast<fnCallback>(pre)),
 		_post_callback(reinterpret_cast<fnCallback>(post)),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -684,9 +836,6 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...), fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -695,9 +844,6 @@ public:
 	Member(void* function, fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -708,9 +854,6 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...), std::nullptr_t, fnCallback post) : 
 		_pre_callback(nullptr),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -719,9 +862,6 @@ public:
 	Member(void* function, std::nullptr_t, fnCallback post) : 
 		_pre_callback(nullptr),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -732,9 +872,6 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...), fnCallback pre, std::nullptr_t) : 
 		_pre_callback(pre),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -743,9 +880,6 @@ public:
 	Member(void* function, fnCallback pre, std::nullptr_t) : 
 		_pre_callback(pre),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -756,9 +890,6 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...) const, fnCallbackConst pre, fnCallbackConst post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -767,9 +898,6 @@ public:
 	Member(const void* function, fnCallbackConst pre, fnCallbackConst post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -780,9 +908,6 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...) const, std::nullptr_t, fnCallbackConst post) : 
 		_pre_callback(nullptr),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -791,9 +916,6 @@ public:
 	Member(const void* function, std::nullptr_t, fnCallbackConst post) : 
 		_pre_callback(nullptr),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -804,9 +926,6 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...) const, fnCallbackConst pre, std::nullptr_t) : 
 		_pre_callback(pre),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -815,9 +934,6 @@ public:
 	Member(const void* function, fnCallbackConst pre, std::nullptr_t) : 
 		_pre_callback(pre),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
@@ -829,12 +945,13 @@ public:
 	Member(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 	
 	// CTOR - CONST - No function - Context
@@ -842,12 +959,13 @@ public:
 	Member(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 
 	// CTOR - No function - Context - NULL POST
@@ -855,12 +973,13 @@ public:
 	Member(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 	}
 	
 	// CTOR - CONST - No function - Context - NULL POST
@@ -868,12 +987,13 @@ public:
 	Member(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 	}
 
 	// CTOR - No function - Context - NULL PRE
@@ -881,12 +1001,13 @@ public:
 	Member(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 	
 	// CTOR - CONST - No function - Context - NULL PRE
@@ -894,12 +1015,13 @@ public:
 	Member(CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 
 	// CTOR - Function - Context
@@ -907,24 +1029,26 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 	template<typename CONTEXT>
 	Member(void* function, CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 	
@@ -933,24 +1057,26 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 	template<typename CONTEXT>
 	Member(const void* function, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 
@@ -959,24 +1085,26 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 		Configure(function);
 	}
 	template<typename CONTEXT>
 	Member(void* function, CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 		Configure(function);
 	}
 	
@@ -985,24 +1113,26 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 		Configure(function);
 	}
 	template<typename CONTEXT>
 	Member(const void* function, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 		Configure(function);
 	}
 
@@ -1011,24 +1141,26 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 	template<typename CONTEXT>
 	Member(void* function, CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 	
@@ -1037,24 +1169,26 @@ public:
 	Member(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 	template<typename CONTEXT>
 	Member(const void* function, CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_in_deletion(false),
 		_associated_hook_id(INVALID_HOOK),
 		_hooked_addr(nullptr) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 		Configure(function);
 	}
 
@@ -1071,7 +1205,88 @@ public:
 		}
 	}
 
-	void Configure(const void* address) {
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void RemoveContext(CONTEXT* context) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs.erase((EmptyClass*)context);
+	}
+
+	inline void Configure(const void* addr) {
+		return _Configure(addr);
+	}
+
+	inline void Configure(RETURN (CLASS::*function)(ARGS...)) {
+		return _Configure(::KHook::ExtractMFP(function));
+	}
+
+	inline void Configure(RETURN (CLASS::*function)(ARGS...) const) {
+		return _Configure(::KHook::ExtractMFP(function));
+	}
+
+	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
+		auto original_func = KHook::FindOriginal((void*)_hooked_addr);
+		auto mfp = KHook::BuildMFP<RETURN (CLASS::*)(ARGS...)>(original_func);
+		return (this_ptr->*mfp)(args...);
+	}
+protected:
+	inline void _Configure(void* address) {
+		return _Configure(reinterpret_cast<const void*>(address));
+	}
+	void _Configure(const void* address) {
 		if (address == nullptr || _in_deletion) {
 			return;
 		}
@@ -1086,14 +1301,15 @@ public:
 			::KHook::RemoveHook(_associated_hook_id, true);
 		}
 
-		_associated_hook_id = SetupHook(
+		_associated_hook_id = ::KHook::SetupHook(
 			(void*)address,
 			this,
-			ExtractMFP(&Self::_KHook_RemovedHook),
+			(void*)&Self::_KHook_RemovedHook,
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
+			Self::template _copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (_associated_hook_id != INVALID_HOOK) {
@@ -1103,30 +1319,15 @@ public:
 		}
 	}
 
-	inline void Configure(void* address) {
-		return Configure(reinterpret_cast<const void*>(address));
-	}
-
-	inline void Configure(RETURN (CLASS::*function)(ARGS...)) {
-		return Configure(ExtractMFP(function));
-	}
-
-	inline void Configure(RETURN (CLASS::*function)(ARGS...) const) {
-		return Configure(ExtractMFP(function));
-	}
-
-	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
-		auto original_func = KHook::FindOriginal((void*)_hooked_addr);
-		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
-		return (this_ptr->*mfp)(args...);
-	}
-protected:
-	// Various filters to make MemberHook class useful
 	fnCallback _pre_callback;
 	fnCallback _post_callback;
-	void* _context;
-	void* _context_pre_callback;
-	void* _context_post_callback;
+
+	struct __context_details {
+		__mfp__<EmptyClass, Return<RETURN>, CLASS*, ARGS...> pre;
+		__mfp__<EmptyClass, Return<RETURN>, CLASS*, ARGS...> post;
+	};
+	std::mutex _m_context_ptrs;
+	std::unordered_map<EmptyClass*, __context_details> _context_ptrs;
 
 	bool _in_deletion;
 	std::mutex _hooks_stored;
@@ -1136,31 +1337,57 @@ protected:
 	const void* _hooked_addr;
 
 	// Called by KHook
-	void _KHook_RemovedHook(HookID_t id) {
-		std::lock_guard guard(_hooks_stored);
-		_hook_ids.erase(id);
-		if (id == _associated_hook_id) {
-			_associated_hook_id = INVALID_HOOK;
+	static void _KHook_RemovedHook(HookID_t id) {
+		auto ctx = KHook::GetContext<Self>();
+
+		std::lock_guard guard(ctx->_hooks_stored);
+		ctx->_hook_ids.erase(id);
+		if (id == ctx->_associated_hook_id) {
+			ctx->_associated_hook_id = INVALID_HOOK;
 		}
 	}
 
 	// Fixed KHook callback
 	void _KHook_Callback_Fixed(bool post, CLASS* hooked_this, ARGS... args) {
-		fnContextCallback<EmptyClass> context_callback = KHook::BuildMFP<EmptyClass, Return<RETURN>, CLASS*, ARGS...>((post) ? this->_context_post_callback : this->_context_pre_callback);
-		auto callback = (post) ? this->_post_callback : this->_pre_callback;
+		KHook::Return<RETURN> action;
+		action.action = KHook::Action::Ignore;
 
-		if (callback == nullptr && context_callback == nullptr) {
-			return;
+		if (post && this->_post_callback) {
+			action = (*this->_post_callback)(hooked_this, args...);
+		} else if (!post && this->_pre_callback) {
+			action = (*this->_pre_callback)(hooked_this, args...);
 		}
 
-		Return<RETURN> action = (_context) ? (((EmptyClass*)_context)->*context_callback)(hooked_this, args...) : (*callback)(hooked_this, args...);
+		{
+			decltype(this->_context_ptrs) copied_ctxs;
+			{
+				// This can deadlock (in case of recalls)
+				// so make a deep-copy
+				std::lock_guard guard(this->_m_context_ptrs);
+				copied_ctxs = this->_context_ptrs;
+			}
+			for (const auto& context : copied_ctxs) {
+				auto context_ptr = context.first;
+				if (post && context.second.post) {
+					auto new_action = (context_ptr->*(context.second.post))(hooked_this, args...);
+					if (new_action.action > action.action) {
+						action = new_action;
+					}
+				} else if (!post && context.second.pre) {
+					auto new_action = (context_ptr->*(context.second.pre))(hooked_this, args...);
+					if (new_action.action > action.action) {
+						action = new_action;
+					}
+				}
+			}
+		}
 		::KHook::__internal__savereturnvalue(action, false);
 	}
 
 	// Called by KHook
 	RETURN _KHook_Callback_PRE(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(false, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1170,7 +1397,7 @@ protected:
 	// Called by KHook
 	RETURN _KHook_Callback_POST(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(true, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1193,7 +1420,7 @@ protected:
 
 	// Called if the hook wasn't superceded
 	RETURN _KHook_MakeOriginalCall(ARGS ...args) {
-		RETURN (EmptyClass::*ptr)(ARGS...) = BuildMFP<EmptyClass, RETURN, ARGS...>(::KHook::GetOriginalFunction());
+		auto ptr = ::KHook::BuildMFP<RETURN (EmptyClass::*)(ARGS...)>(::KHook::GetOriginalFunction());
 		if constexpr(std::is_same<RETURN, void>::value) {
 			(((EmptyClass*)this)->*ptr)(args...);
 			::KHook::__internal__savereturnvalue(KHook::Return<void>{ KHook::Action::Ignore }, true);
@@ -1205,20 +1432,18 @@ protected:
 	}
 };
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...));
+template<typename FUNC>
+inline std::int32_t GetVtableIndex(FUNC function);
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...) const);
-
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline __mfp__<CLASS, RETURN, ARGS...> GetVtableFunction(CLASS* ptr, RETURN (CLASS::*mfp)(ARGS...)) {
+template<typename CLASS, typename FUNC>
+inline FUNC GetVtableFunction(CLASS* ptr, FUNC mfp) {
+	static_assert(std::is_member_function_pointer<FUNC>::value, "Error: FUNC is not a member function pointer!");
 	void** vtable = *(void***)ptr;
 	auto index = ::KHook::GetVtableIndex(mfp);
 	if (index == -1) {
 		return nullptr;
 	}
-	return BuildMFP<CLASS, RETURN, ARGS...>(vtable[index]);
+	return ::KHook::BuildMFP<FUNC>(vtable[index]);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
@@ -1228,14 +1453,16 @@ inline __mfp_const__<CLASS, RETURN, ARGS...> GetVtableFunction(const CLASS* ptr,
 	if (index == -1) {
 		return nullptr;
 	}
-	return BuildMFP<CLASS, RETURN, ARGS...>(vtable[index]);
+	return ::KHook::BuildMFP<__mfp_const__<CLASS, RETURN, ARGS...>>(vtable[index]);
 }
 
 template<typename CLASS, typename RETURN, typename... ARGS>
 inline __mfp__<CLASS, RETURN, ARGS...> GetVtableFunction(CLASS* ptr, std::uint32_t index) {
 	void** vtable = *(void***)ptr;
-	return BuildMFP<CLASS, RETURN, ARGS...>(vtable[index]);
+	return ::KHook::BuildMFP<__mfp__<CLASS, RETURN, ARGS...>>(vtable[index]);
 }
+
+using VirtualHookId_t = std::uint32_t;
 
 template<typename CLASS, typename RETURN, typename... ARGS>
 class Virtual : public Hook<RETURN> {
@@ -1250,13 +1477,17 @@ public:
 	using fnCallbackConst = ::KHook::Return<RETURN> (*)(const CLASS*, ARGS...);
 	using Self = ::KHook::Virtual<CLASS, RETURN, ARGS...>;
 
+	Virtual() :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(INVALID_VTBL_INDEX),
+		_in_deletion(false) {
+	}
+
 	// CTOR - No function
 	Virtual(fnCallback pre, fnCallback post) :
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(INVALID_VTBL_INDEX),
 		_in_deletion(false) {
 	}
@@ -1265,10 +1496,15 @@ public:
 	Virtual(fnCallbackConst pre, fnCallbackConst post) :
 		_pre_callback(reinterpret_cast<fnCallback>(pre)),
 		_post_callback(reinterpret_cast<fnCallback>(post)),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(INVALID_VTBL_INDEX),
+		_in_deletion(false) {
+	}
+
+	// CTOR - Function - NO PRE OR POST
+	Virtual(RETURN (CLASS::*function)(ARGS...)) : 
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
 
@@ -1276,9 +1512,6 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...), fnCallback pre, fnCallback post) : 
 		_pre_callback(pre),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
@@ -1287,9 +1520,6 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...), std::nullptr_t, fnCallback post) : 
 		_pre_callback(nullptr),
 		_post_callback(post),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
@@ -1298,9 +1528,6 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...), fnCallback pre, std::nullptr_t) : 
 		_pre_callback(pre),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
@@ -1309,9 +1536,6 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...) const, fnCallbackConst pre, fnCallbackConst post) : 
 		_pre_callback(reinterpret_cast<fnCallback>(pre)),
 		_post_callback(reinterpret_cast<fnCallback>(post)),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
@@ -1320,9 +1544,6 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...) const, std::nullptr_t, fnCallbackConst post) : 
 		_pre_callback(nullptr),
 		_post_callback(reinterpret_cast<fnCallback>(post)),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
 	}
@@ -1331,82 +1552,7 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...) const, fnCallbackConst pre, std::nullptr_t) : 
 		_pre_callback(reinterpret_cast<fnCallback>(pre)),
 		_post_callback(nullptr),
-		_context(nullptr),
-		_context_pre_callback(nullptr),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
-		_in_deletion(false) {
-	}
-
-	// CTOR - No Function - Context
-	template<typename CONTEXT>
-	Virtual(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) :
-		_pre_callback(nullptr),
-		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(INVALID_VTBL_INDEX),
-		_in_deletion(false) {
-	}
-
-	// CTOR - CONST - No Function - Context
-	template<typename CONTEXT>
-	Virtual(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) :
-		_pre_callback(nullptr),
-		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(INVALID_VTBL_INDEX),
-		_in_deletion(false) {
-	}
-	
-	// CTOR - No function - Context - NULL PRE
-	template<typename CONTEXT>
-	Virtual(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) :
-		_pre_callback(nullptr),
-		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(INVALID_VTBL_INDEX),
-		_in_deletion(false) {
-	}
-	
-	// CTOR - CONST - No function - Context - NULL PRE
-	template<typename CONTEXT>
-	Virtual(CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) :
-		_pre_callback(nullptr),
-		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
-		_vtbl_index(INVALID_VTBL_INDEX),
-		_in_deletion(false) {
-	}
-
-	// CTOR - No function - Context - NULL POST
-	template<typename CONTEXT>
-	Virtual(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) :
-		_pre_callback(nullptr),
-		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
-		_vtbl_index(INVALID_VTBL_INDEX),
-		_in_deletion(false) {
-	}
-
-	// CTOR - CONST - No function - Context - NULL POST
-	template<typename CONTEXT>
-	Virtual(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) :
-		_pre_callback(nullptr),
-		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
-		_vtbl_index(INVALID_VTBL_INDEX),
 		_in_deletion(false) {
 	}
 	
@@ -1415,11 +1561,12 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 	
 	// CTOR - CONST - Function - Context
@@ -1427,11 +1574,12 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(ExtractMFP(post)),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 
 	// CTOR - Function - Context - NULL PRE
@@ -1439,11 +1587,12 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 	
 	// CTOR - CONST - Function - Context - NULL PRE
@@ -1451,11 +1600,12 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(nullptr),
-		_context_post_callback(ExtractMFP(post)),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
 	}
 
 	// CTOR - Function - Context - NULL POST
@@ -1463,11 +1613,12 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...), CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 	}
 	
 	// CTOR - CONST - Function - Context - NULL POST
@@ -1475,11 +1626,138 @@ public:
 	Virtual(RETURN (CLASS::*function)(ARGS...) const, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) : 
 		_pre_callback(nullptr),
 		_post_callback(nullptr),
-		_context(context),
-		_context_pre_callback(ExtractMFP(pre)),
-		_context_post_callback(nullptr),
 		_vtbl_index(GetVtableIndex(function)),
 		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	// CTOR - VTable index
+	Virtual(std::uint32_t index, fnCallback pre, fnCallback post) :
+		_pre_callback(pre),
+		_post_callback(post),
+		_vtbl_index(index),
+		_in_deletion(false) {
+	}
+
+	// CTOR - VTable index - NULL PRE
+	Virtual(std::uint32_t index, std::nullptr_t, fnCallback post) : 
+		_pre_callback(nullptr),
+		_post_callback(post),
+		_vtbl_index(index),
+		_in_deletion(false) {
+	}
+
+	// CTOR - VTable index - NULL POST
+	Virtual(std::uint32_t index, fnCallback pre, std::nullptr_t) : 
+		_pre_callback(pre),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+	}
+	
+	// CTOR - CONST - VTable index
+	Virtual(std::uint32_t index, fnCallbackConst pre, fnCallbackConst post) : 
+		_pre_callback(reinterpret_cast<fnCallback>(pre)),
+		_post_callback(reinterpret_cast<fnCallback>(post)),
+		_vtbl_index(index),
+		_in_deletion(false) {
+	}
+
+	// CTOR - CONST - VTable index - NULL PRE
+	Virtual(std::uint32_t index, std::nullptr_t, fnCallbackConst post) : 
+		_pre_callback(nullptr),
+		_post_callback(reinterpret_cast<fnCallback>(post)),
+		_vtbl_index(index),
+		_in_deletion(false) {
+	}
+
+	// CTOR - CONST - VTable index - NULL POST
+	Virtual(std::uint32_t index, fnCallbackConst pre, std::nullptr_t) : 
+		_pre_callback(reinterpret_cast<fnCallback>(pre)),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+	}
+
+	// CTOR - VTable Index - Context
+	template<typename CONTEXT>
+	Virtual(std::uint32_t index, CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	// CTOR - CONST - VTable Index - Context
+	template<typename CONTEXT>
+	Virtual(std::uint32_t index, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+	
+	// CTOR - VTable Index - Context - NULL PRE
+	template<typename CONTEXT>
+	Virtual(std::uint32_t index, CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+	
+	// CTOR - CONST - VTable Index - Context - NULL PRE
+	template<typename CONTEXT>
+	Virtual(std::uint32_t index, CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	// CTOR - VTable Index - Context - NULL POST
+	template<typename CONTEXT>
+	Virtual(std::uint32_t index, CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	// CTOR - CONST - VTable Index - Context - NULL POST
+	template<typename CONTEXT>
+	Virtual(std::uint32_t index, CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) :
+		_pre_callback(nullptr),
+		_post_callback(nullptr),
+		_vtbl_index(index),
+		_in_deletion(false) {
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
 	}
 
 	virtual ~Virtual() {
@@ -1495,12 +1773,72 @@ public:
 		}
 	}
 
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallback<CONTEXT> pre, std::nullptr_t) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, std::nullptr_t) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			nullptr
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallback<CONTEXT> pre, fnContextCallback<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, fnContextCallbackConst<CONTEXT> pre, fnContextCallbackConst<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(pre)),
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, std::nullptr_t, fnContextCallback<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void AddContext(CONTEXT* context, std::nullptr_t, fnContextCallbackConst<CONTEXT> post) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs[(EmptyClass*)context] = {
+			nullptr,
+			::KHook::BuildMFP<fnContextCallback<EmptyClass>>(::KHook::ExtractMFP(post))
+		};
+	}
+
+	template<typename CONTEXT>
+	void RemoveContext(CONTEXT* context) {
+		std::lock_guard guard(this->_m_context_ptrs);
+		_context_ptrs.erase((EmptyClass*)context);
+	}
+
 	void Add(CLASS* this_ptr) {
 		{
 			std::lock_guard guard(_m_hooked_this);
 			_hooked_this.insert(this_ptr);
 		}
-		Configure(*(void***)this_ptr);
+		_Setup(*(void***)this_ptr);
 	}
 
 	void Remove(CLASS* this_ptr) {
@@ -1510,13 +1848,28 @@ public:
 		}
 	}
 
+	void AddGlobal(CLASS* this_ptr) {
+		{
+			std::lock_guard guard(_m_hooked_this);
+			_hooked_global.insert(*(void***)this_ptr);
+		}
+		_Setup(*(void***)this_ptr);
+	}
+
+	void RemoveGlobal(CLASS* this_ptr) {
+		{
+			std::lock_guard guard(_m_hooked_this);
+			_hooked_global.erase(*(void***)this_ptr);
+		}
+	}
+
 	RETURN CallOriginal(CLASS* this_ptr, ARGS... args) {
 		auto original_func = KHook::FindOriginalVirtual(*(void***)this_ptr, _vtbl_index);
-		auto mfp = KHook::BuildMFP<CLASS, RETURN, ARGS...>(original_func);
+		auto mfp = KHook::BuildMFP<RETURN (CLASS::*)(ARGS...)>(original_func);
 		return (this_ptr->*mfp)(args...);
 	}
 
-	void SetIndex(std::int32_t index) {
+	void Configure(std::int32_t index) {
 		if (_vtbl_index == index) {
 			return;
 		}
@@ -1536,13 +1889,43 @@ public:
 		}
 		_vtbl_index = index;
 	}
+
+	void Configure(RETURN (CLASS::*function)(ARGS...)) {
+		std::int32_t index = KHook::GetVtableIndex(function);
+		if (index == -1) {
+			return;
+		}
+		Configure(index);
+	}
+
+	void Configure(RETURN (CLASS::*function)(ARGS...) const) {
+		std::int32_t index = KHook::GetVtableIndex(function);
+		if (index == -1) {
+			return;
+		}
+		Configure(index);
+	}
+
+	bool IsActive() {
+		std::lock_guard guard(this->_m_hooked_this);
+		return _hooked_this.size() != 0 || _hooked_global.size() != 0;
+	}
+
+	void ClearHooks() {
+		std::lock_guard guard(this->_m_hooked_this);
+		_hooked_this.clear();
+		_hooked_global.clear();
+	}
 protected:
-	// Various filters to make MemberHook class useful
 	fnCallback _pre_callback;
 	fnCallback _post_callback;
-	void* _context;
-	void* _context_pre_callback;
-	void* _context_post_callback;
+
+	struct __context_details {
+		__mfp__<EmptyClass, Return<RETURN>, CLASS*, ARGS...> pre;
+		__mfp__<EmptyClass, Return<RETURN>, CLASS*, ARGS...> post;
+	};
+	std::mutex _m_context_ptrs;
+	std::unordered_map<EmptyClass*, __context_details> _context_ptrs;
 
 	std::int32_t _vtbl_index;
 
@@ -1553,17 +1936,20 @@ protected:
 
 	std::mutex _m_hooked_this;
 	std::unordered_set<CLASS*> _hooked_this;
+	std::unordered_set<void**> _hooked_global;
 
 	// Called by KHook
-	void _KHook_RemovedHook(HookID_t id) {
-		std::lock_guard guard(_hooks_stored);
-		auto it = _hook_ids_addr.find(id);
-		if (it != _hook_ids_addr.end()) {
-			_addr_hook_ids.erase(it->second);
+	static void _KHook_RemovedHook(HookID_t id) {
+		auto ctx = KHook::GetContext<Self>();
+
+		std::lock_guard guard(ctx->_hooks_stored);
+		auto it = ctx->_hook_ids_addr.find(id);
+		if (it != ctx->_hook_ids_addr.end()) {
+			ctx->_addr_hook_ids.erase(it->second);
 		}
 	}
 
-	void Configure(void** vtable) {
+	void _Setup(void** vtable) {
 		if (vtable == nullptr || _in_deletion || _vtbl_index == INVALID_VTBL_INDEX) {
 			return;
 		}
@@ -1571,7 +1957,7 @@ protected:
 		{
 			std::lock_guard guard(_hooks_stored);
 			// Retrieve the hookID with this vtable if it exists
-			if (_addr_hook_ids.find(vtable) != _addr_hook_ids.end()) {
+			if (_addr_hook_ids.find(vtable + _vtbl_index) != _addr_hook_ids.end()) {
 				// Already hooked so ignore
 				return;
 			}
@@ -1581,17 +1967,18 @@ protected:
 			vtable,
 			_vtbl_index,
 			this,
-			ExtractMFP(&Self::_KHook_RemovedHook),
+			(void*)&Self::_KHook_RemovedHook,
 			ExtractMFP(&Self::_KHook_Callback_PRE), // preMFP
 			ExtractMFP(&Self::_KHook_Callback_POST), // postMFP
 			ExtractMFP(&Self::_KHook_MakeReturn), // returnMFP,
 			ExtractMFP(&Self::_KHook_MakeOriginalCall), // callOriginalMFP
+			Self::template _copy_stack_size<void*, ARGS...>(),
 			true // For safety reasons we are adding hooks asynchronously. If performance is required, reimplement this class
 		);
 		if (id != INVALID_HOOK) {
 			std::lock_guard guard(_hooks_stored);
-			_hook_ids_addr[id] = vtable[_vtbl_index];
-			_addr_hook_ids[vtable[_vtbl_index]] = id;
+			_hook_ids_addr[id] = vtable + _vtbl_index;
+			_addr_hook_ids[vtable + _vtbl_index] = id;
 		}
 	}
 
@@ -1599,26 +1986,54 @@ protected:
 	void _KHook_Callback_Fixed(bool post, CLASS* hooked_this, ARGS... args) { 
 		{
 			std::lock_guard guard(this->_m_hooked_this);
+			// Did we hook this ptr
 			if (_hooked_this.find(hooked_this) == _hooked_this.end()) {
-				return;
+				// This is perhaps a global hook instead
+				if (_hooked_global.find(*(void***)hooked_this) == _hooked_global.end()) {
+					return;
+				}
 			}
 		}
 
-		fnContextCallback<EmptyClass> context_callback = KHook::BuildMFP<EmptyClass, Return<RETURN>, CLASS*, ARGS...>((post) ? this->_context_post_callback : this->_context_pre_callback);
-		auto callback = (post) ? this->_post_callback : this->_pre_callback;
+		KHook::Return<RETURN> action;
+		action.action = KHook::Action::Ignore;
 
-		if (callback == nullptr && context_callback == nullptr) {
-			return;
+		if (post && this->_post_callback) {
+			action = (*this->_post_callback)(hooked_this, args...);
+		} else if (!post && this->_pre_callback) {
+			action = (*this->_pre_callback)(hooked_this, args...);
 		}
 
-		Return<RETURN> action = (_context) ? (((EmptyClass*)_context)->*context_callback)(hooked_this, args...) : (*callback)(hooked_this, args...);
+		{
+			decltype(this->_context_ptrs) copied_ctxs;
+			{
+				// This can deadlock (in case of recalls)
+				// so make a deep-copy
+				std::lock_guard guard(this->_m_context_ptrs);
+				copied_ctxs = this->_context_ptrs;
+			}
+			for (const auto& context : copied_ctxs) {
+				auto context_ptr = context.first;
+				if (post && context.second.post) {
+					auto new_action = (context_ptr->*(context.second.post))(hooked_this, args...);
+					if (new_action.action > action.action) {
+						action = new_action;
+					}
+				} else if (!post && context.second.pre) {
+					auto new_action = (context_ptr->*(context.second.pre))(hooked_this, args...);
+					if (new_action.action > action.action) {
+						action = new_action;
+					}
+				}
+			}
+		}
 		::KHook::__internal__savereturnvalue(action, false);
 	}
 
 	// Called by KHook
 	RETURN _KHook_Callback_PRE(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto* real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(false, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1628,7 +2043,7 @@ protected:
 	// Called by KHook
 	RETURN _KHook_Callback_POST(ARGS... args) {
 		// Retrieve the real VirtualHook
-		Self* real_this = (Self*)::KHook::GetContext();
+		auto* real_this = KHook::GetContext<Self>();
 		real_this->_KHook_Callback_Fixed(true, (CLASS*)this, args...);
 		if constexpr(!std::is_same<RETURN, void>::value) {
 			return *real_this->_fake_return;
@@ -1651,7 +2066,7 @@ protected:
 
 	// Called if the hook wasn't superceded
 	RETURN _KHook_MakeOriginalCall(ARGS ...args) {
-		RETURN (EmptyClass::*ptr)(ARGS...) = BuildMFP<EmptyClass, RETURN, ARGS...>(::KHook::GetOriginalFunction());
+		auto ptr = ::KHook::BuildMFP<RETURN (EmptyClass::*)(ARGS...)>(::KHook::GetOriginalFunction());
 		if constexpr(std::is_same<RETURN, void>::value) {
 			(((EmptyClass*)this)->*ptr)(args...);
 			::KHook::__internal__savereturnvalue(KHook::Return<void>{ KHook::Action::Ignore }, true);
@@ -1719,8 +2134,9 @@ struct __MFPInfo__
 	std::intptr_t delta;
 };
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...)) {
+template<typename FUNC>
+inline std::int32_t GetVtableIndex(FUNC function) {
+	static_assert(std::is_member_function_pointer<FUNC>::value, "Error: FUNC is not a member function pointer!");
 #ifdef _WIN32
 	return __GetVtableIndex__(reinterpret_cast<const std::uint8_t*>(ExtractMFP(function)));
 #else
@@ -1732,21 +2148,10 @@ inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...)) {
 #endif
 }
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline std::int32_t GetVtableIndex(RETURN (CLASS::*function)(ARGS...) const) {
-#ifdef _WIN32
-	return __GetVtableIndex__(reinterpret_cast<const std::uint8_t*>(ExtractMFP(function)));
-#else
-	__MFPInfo__* info = (__MFPInfo__*)&function;
-	if (info->vtbl_index & 1) {
-		return (info->vtbl_index - 1) / sizeof(void*);
-	}
-	return -1;
-#endif
-}
+template<typename F, typename CLASS, typename ...ARGS>
+inline std::invoke_result_t<F, CLASS, ARGS...> __MFP__CallOriginal(F function, CLASS&& this_ptr, ARGS&&... args) {
+	F dummy_func = nullptr;
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline RETURN CallOriginal(RETURN (CLASS::*function)(ARGS...), CLASS* this_ptr, ARGS... args) {
 	auto vtbl_index = ::KHook::GetVtableIndex(function);
 	void* func = nullptr;
 	if (vtbl_index != -1) {
@@ -1755,44 +2160,26 @@ inline RETURN CallOriginal(RETURN (CLASS::*function)(ARGS...), CLASS* this_ptr, 
 	else {
 		func = ::KHook::FindOriginal(::KHook::ExtractMFP(function));
 	}
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
-	return (this_ptr->*mfp)(args...);
+	::KHook::FillMFP(&dummy_func, func);
+	return (this_ptr->*dummy_func)(std::forward<ARGS>(args)...);
 }
 
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline RETURN CallOriginal(RETURN (CLASS::*function)(ARGS...) const, const CLASS* this_ptr, ARGS... args) {
-	auto vtbl_index = ::KHook::GetVtableIndex(function);
-	const void* func = nullptr;
-	if (vtbl_index != -1) {
-		func = ::KHook::FindOriginalVirtual(*(void***)this_ptr, vtbl_index);
+template<typename F, typename ...ARGS>
+inline std::invoke_result_t<F, ARGS...> CallOriginal(F f, ARGS&&... args) {
+	if constexpr (std::is_member_function_pointer<F>::value) {
+		return ::KHook::__MFP__CallOriginal(f, std::forward<ARGS>(args)...);
+	} else {
+		F function = (decltype(f))::KHook::FindOriginal(f);
+		return (*function)(std::forward<ARGS>(args)...);
 	}
-	else {
-		func = ::KHook::FindOriginal(::KHook::ExtractMFP(function));
-	}
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
-	return (this_ptr->*mfp)(args...);
-}
-
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline RETURN CallOriginal(void* func, CLASS* this_ptr, ARGS... args) {
-	func = ::KHook::FindOriginal(func);
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
-	return (this_ptr->*mfp)(args...);
-}
-
-template<typename CLASS, typename RETURN, typename... ARGS>
-inline RETURN CallOriginal(const void* func, const CLASS* this_ptr, ARGS... args) {
-	func = (const void*)::KHook::FindOriginal((void*)func);
-	auto mfp = ::KHook::BuildMFP<CLASS, RETURN, ARGS...>(func);
-	return (this_ptr->*mfp)(args...);
 }
 
 class IKHook {
 public:
-	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
-	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async = false) = 0;
+	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
+	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
 	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
-	virtual void* GetContext() = 0;
+	virtual void* GetContextPtr() = 0;
 	virtual void* GetOriginalFunction() = 0;
 	virtual void* GetOriginalValuePtr() = 0;
 	virtual void* GetOverrideValuePtr() = 0;
@@ -1802,12 +2189,13 @@ public:
 	virtual void* FindOriginalVirtual(void** vtable, int index) = 0;
 	virtual void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op) = 0;
 	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) = 0;
+	virtual void* LookupSignature(void* start, std::size_t size, const char* signature) = 0;
 };
 #ifndef KHOOK_STANDALONE
 // KHOOK is exposed by something
 extern IKHook* __exported__khook;
 
-KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
+KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
@@ -1818,10 +2206,10 @@ KHOOK_API HookID_t SetupHook(void* function, void* context, void* removed_functi
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
 		return INVALID_HOOK;
 	}
-	return __exported__khook->SetupHook(function, context, removed_function, pre, post, make_return, make_call_original, async);
+	return __exported__khook->SetupHook(function, context, removed_function, pre, post, make_return, make_call_original, stack_size, async);
 }
 
-KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, bool async) {
+KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async) {
 	// For some hooks this is too early
 	if (__exported__khook == nullptr) {
 		std::cout << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
@@ -1832,15 +2220,15 @@ KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, voi
 		std::cerr << "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n";
 		return INVALID_HOOK;
 	}
-	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, async);
+	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, stack_size, async);
 }
 
 KHOOK_API void RemoveHook(HookID_t id, bool async) {
 	return __exported__khook->RemoveHook(id, async);
 }
 
-KHOOK_API void* GetContext() {
-	return __exported__khook->GetContext();
+KHOOK_API void* GetContextPtr() {
+	return __exported__khook->GetContextPtr();
 }
 
 KHOOK_API void* GetOriginalFunction() {
@@ -1877,6 +2265,10 @@ KHOOK_API void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t 
 
 KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) {
 	return __exported__khook->SaveReturnValue(action, ptr_to_return, return_size, init_op, deinit_op, original);
+}
+
+KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature) {
+	return __exported__khook->LookupSignature(start, size, signature);
 }
 
 #endif

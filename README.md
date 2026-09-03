@@ -90,4 +90,8 @@ All hooks can be configured through the use of the function `Configure`.
 
 ## Testing
 
-There is currently no test suite.
+The test suite uses the [GoogleTest](https://github.com/google/googletest) framework and can be built by configuring AMBuild with the `--enable-tests` flag. Tests must be executed in parallel with [gtest-parallel](https://github.com/google/gtest-parallel) in their own processes to avoid conflicts with each other.
+
+To execute the test suite, run the `test.py` script with the `--target` argument specifying the target architecture to test, `x86` for 32-bit or `x86_64` for 64-bit. For example, to test the 64-bit target, run `python test.py --target x86_64`. The script will handle building the tests and executing them in parallel.
+
+For more options, run `python test.py --help`.

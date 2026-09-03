@@ -317,9 +317,8 @@ namespace KHook
 		a waste of virtual address space (Windows’ VirtualAlloc has a granularity of 64K).
 
 
-		IMPORTANT: the memory that Alloc() returns is not a in a defined state!
-		It could be in read+exec OR read+write mode.
-		-> call SetRE() or SetRW() before using allocated memory!
+		Memory that Alloc() returns is mapped read+write+execute, so it can be
+		written to (code generation) and executed without any further protection changes.
 		*/
 		class CPageAlloc
 		{
@@ -346,7 +345,6 @@ namespace KHook
 				bool isolated;
 				std::size_t minAlignment;
 				AUList allocUnits;
-				bool isRE;
 
 				void CheckGap(std::size_t gap_begin, std::size_t gap_end, std::size_t reqsize,
 					std::size_t &smallestgap_pos, std::size_t &smallestgap_size, std::size_t &outAlignBytes)
@@ -431,21 +429,10 @@ namespace KHook
 
 				void DebugCleanMemory(unsigned char* start, size_t size)
 				{
-					bool wasRE = isRE;
-					if (isRE)
-					{
-						SetRW();
-					}
-
 					unsigned char* end = start + size;
 					for (unsigned char* p = start; p != end; ++p)
 					{
 						*p = 0xCC;
-					}
-
-					if (wasRE)
-					{
-						SetRE();
 					}
 				}
 
@@ -461,18 +448,6 @@ namespace KHook
 #else
 					munmap(startPtr, size);
 #endif
-				}
-
-				void SetRE()
-				{
-					Memory::SetAccess(startPtr, size, Memory::Flags::READ | Memory::Flags::EXECUTE);
-					isRE = true;
-				}
-
-				void SetRW()
-				{
-					Memory::SetAccess(startPtr, size, Memory::Flags::READ | Memory::Flags::WRITE);
-					isRE = false;
 				}
 			};
 
@@ -496,14 +471,15 @@ namespace KHook
 					newRegion.size += m_PageSize;
 
 #ifdef _WIN32
-				newRegion.startPtr = VirtualAlloc(nullptr, newRegion.size, MEM_COMMIT, PAGE_READWRITE);
+				newRegion.startPtr = VirtualAlloc(nullptr, newRegion.size, MEM_COMMIT, PAGE_EXECUTE_READWRITE);
 #else
-				newRegion.startPtr = mmap(0, newRegion.size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANON, -1, 0);
+				newRegion.startPtr = mmap(0, newRegion.size, PROT_READ | PROT_WRITE | PROT_EXEC, MAP_PRIVATE | MAP_ANON, -1, 0);
+				if (newRegion.startPtr == MAP_FAILED)
+					newRegion.startPtr = nullptr;
 #endif
 
 				if (newRegion.startPtr)
 				{
-					newRegion.SetRW();
 					m_Regions.push_back(newRegion);
 					return true;
 				}
@@ -582,30 +558,6 @@ namespace KHook
 				}
 			}
 
-			void SetRE(void *ptr)
-			{
-				for (ARList::iterator iter = m_Regions.begin(); iter != m_Regions.end(); ++iter)
-				{
-					if (iter->Contains(ptr))
-					{
-						iter->SetRE();
-						break;
-					}
-				}
-			}
-
-			void SetRW(void *ptr)
-			{
-				for (ARList::iterator iter = m_Regions.begin(); iter != m_Regions.end(); ++iter)
-				{
-					if (iter->Contains(ptr))
-					{
-						iter->SetRW();
-						break;
-					}
-				}
-			}
-
 			std::size_t GetPageSize()
 			{
 				return m_PageSize;
@@ -647,10 +599,6 @@ namespace KHook
 				m_AllocatedSize = 0;
 			}
 
-			void SetRE() {
-				Allocator.SetRE(reinterpret_cast<void*>(m_pData));
-			}
-
 			operator void *() {
 				return reinterpret_cast<void*>(GetData());
 			}
@@ -687,7 +635,6 @@ private:
 
 					unsigned char *newBuf;
 					newBuf = reinterpret_cast<unsigned char*>(Allocator.Alloc(m_AllocatedSize));
-					Allocator.SetRW(newBuf);
 					if (!newBuf) {
 						assertm(false, "bad_alloc: couldn't allocate new bytes of memory\n");
 						return;
@@ -695,8 +642,6 @@ private:
 					std::memset((void*)newBuf, 0xCC, m_AllocatedSize);			// :TODO: remove this !
 					std::memcpy((void*)newBuf, (const void*)m_pData, m_Size);
 					if (m_pData) {
-						Allocator.SetRE(reinterpret_cast<void*>(m_pData));
-						Allocator.SetRW(newBuf);
 						Allocator.Free(reinterpret_cast<void*>(m_pData));
 					}
 					m_pData = newBuf;

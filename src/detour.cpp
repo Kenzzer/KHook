@@ -1,4 +1,5 @@
 #include "detour.hpp"
+#include "ranges.hpp"
 
 #include <stack>
 #include <iostream>
@@ -7,8 +8,20 @@
 namespace KHook {
 
 using namespace KHook::Asm;
+#define STACK_SAFETY_BUFFER 128
 
-#define STACK_SAFETY_BUFFER 112
+#if defined(KHOOK_TESTS) || defined(KHOOK_DEBUG_PRINT)
+#define DEBUG_PRINT(...) \
+	printf(__VA_ARGS__);
+#define DEBUG_ABORT_PRINT(...) \
+	printf(__VA_ARGS__); \
+	fflush(stdout); \
+	::std::this_thread::sleep_for(std::chrono::milliseconds(5)); \
+	::std::abort();
+#else
+#define DEBUG_PRINT(...)
+#define DEBUG_ABORT_PRINT(...) ::std::abort();
+#endif
 
 #ifdef KHOOK_X64
 #define FUNCTION_ATTRIBUTE_PREFIX(ret) ret
@@ -89,7 +102,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) RecursiveLockUnlockShared(std::shared_mut
 		}
 	} else {
 		if (it->second == 0) {
-			std::abort();
+			DEBUG_ABORT_PRINT("Recursive mutex for detour was unlocked too many times!\n")
 		}
 
 		it->second--;
@@ -100,12 +113,19 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) RecursiveLockUnlockShared(std::shared_mut
 	}
 }
 
+enum class CallOriginalState : std::uintptr_t {
+	NotReady = 50,
+	InProgress,
+	Complete,
+	CompleteSkipped
+};
+
 struct AsmLoopDetails {
 	// Current iterated hook
 	std::uintptr_t linked_list_it;
 	std::uintptr_t pre_loop_started;
 	std::uintptr_t pre_loop_over;
-	std::uintptr_t original_call_over;
+	CallOriginalState original_call_state;
 	std::uintptr_t post_loop_over;
 	std::uintptr_t post_loop_started;
 	std::uintptr_t recall_count;
@@ -150,14 +170,14 @@ static thread_local AsmLoopDetails g_last_loop;
 static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_callback) FUNCTION_ATTRIBUTE_SUFFIX {
 	if (g_saved_params.top() != loop || g_is_in_recall) {
 		// Something went horribly wrong with the stack
-		std::abort();
+		DEBUG_ABORT_PRINT("Call stack is corrupted!\n")
 	}
 	
 	if (no_callback) {
 		if (loop->recall_count != 0) {
 			// If this is a recall, and we somehow have no callback then something horribly wrong happened
 			// Terminate the program right now
-			std::abort();
+			DEBUG_ABORT_PRINT("A detour recall happened with no callbacks!\n")
 		}
 		RecursiveLockUnlockShared(&loop->capsule->_detour_mutex, false);
 		// Detour was early ended, unlock the mutex and pop the asm details
@@ -165,6 +185,13 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) EndDetour(AsmLoopDetails* loop, bool no_c
 	} else {
 		// Natural end of a detour, setup everything because AsmLoopDetails is about to go invalid (due to stack being freed)
 		g_last_loop = *loop;
+
+		// Ensure the original function was skipped OR executed, no in-between state
+		if (loop->original_call_state != CallOriginalState::Complete
+		&& loop->original_call_state != CallOriginalState::CompleteSkipped) {
+			DEBUG_ABORT_PRINT("Detour was left in unknown state %d\n", loop->original_call_state)
+		}
+
 		if (loop->recall_count != 0) {
 			RecursiveLockUnlockShared(&loop->capsule->_detour_mutex, false);
 		}
@@ -192,7 +219,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 
 		if (capsule != loop->capsule) {
 			// Not the same detour somehow
-			std::abort();
+			DEBUG_ABORT_PRINT("Different detour capsule (should be impossible)!\n")
 		}
 
 		if (loop->pre_loop_over == false) {
@@ -203,10 +230,6 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 			if (loop->linked_list_it == 0x0) {
 				loop->pre_loop_over = true;
 			}
-		} else if (loop->original_call_over == false) {
-			// Recall happened in the original call, this is technically impossible
-			// But we're going to support it anywways, this will avoid infinite-loops
-			loop->original_call_over = true;
 		} else if (loop->post_loop_over == false) {
 			// Recall happened in a post-loop, move to next iterator
 			auto hook = reinterpret_cast<DetourCapsule::LinkedList*>(loop->linked_list_it);
@@ -217,7 +240,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 			}
 		} else {
 			// A recall happened outside of a hook
-			std::abort();
+			DEBUG_ABORT_PRINT("Recall outside hook callbacks!\n")
 		}
 
 
@@ -233,7 +256,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(AsmLoopDetails*) BeginDetour(
 		new_loop->linked_list_it = 0x0;
 		new_loop->pre_loop_over = false;
 		new_loop->pre_loop_started = false;
-		new_loop->original_call_over = false;
+		new_loop->original_call_state = CallOriginalState::NotReady;
 		new_loop->post_loop_over = false;
 		new_loop->post_loop_started = false;
 		new_loop->recall_count = 0;
@@ -284,7 +307,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) PushRsp(std::uintptr_t rsp) FUNCTION_ATTR
 
 static FUNCTION_ATTRIBUTE_PREFIX(std::uintptr_t) PeekRsp(std::uintptr_t rsp) FUNCTION_ATTRIBUTE_SUFFIX {
 	auto internal_rsp = rsp_values.top();
-	assert((internal_rsp + STACK_SAFETY_BUFFER) > rsp);
+	//assert((internal_rsp + STACK_SAFETY_BUFFER) > rsp);
 	return internal_rsp;
 }
 
@@ -296,6 +319,7 @@ static FUNCTION_ATTRIBUTE_PREFIX(std::uintptr_t) PeekRbp(std::uintptr_t rsp) FUN
 	return reinterpret_cast<std::uintptr_t>(g_saved_params.top());
 }
 
+#ifdef KHOOK_DEBUG_PRINT
 static FUNCTION_ATTRIBUTE_PREFIX(void) PrintRSP(std::uintptr_t rsp) FUNCTION_ATTRIBUTE_SUFFIX {
 #ifdef KHOOK_X64
 	printf("RSP/ESP : 0x%lX\n", rsp);
@@ -309,7 +333,9 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) PrintRSP(std::uintptr_t rsp) FUNCTION_ATT
 		<< std::endl;
 	}*/
 }
+#endif
 
+#ifdef KHOOK_DEBUG_PRINT
 static FUNCTION_ATTRIBUTE_PREFIX(void) PrintRegister(std::uintptr_t reg, const char* name) FUNCTION_ATTRIBUTE_SUFFIX {
 #ifdef KHOOK_X64
 	printf("%s : 0x%lX\n", name, reg);
@@ -317,7 +343,9 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) PrintRegister(std::uintptr_t reg, const c
 	printf("%s : 0x%X\n", name, reg);
 #endif
 }
+#endif
 
+#ifdef KHOOK_DEBUG_PRINT
 static FUNCTION_ATTRIBUTE_PREFIX(void) PrintEntryExitRSP(std::uintptr_t rsp, bool entry) FUNCTION_ATTRIBUTE_SUFFIX {
 #ifdef KHOOK_X64
 	//printf("%s RSP/ESP : 0x%lX\n", (entry) ? "ENTRY" : "EXIT", rsp);
@@ -325,8 +353,9 @@ static FUNCTION_ATTRIBUTE_PREFIX(void) PrintEntryExitRSP(std::uintptr_t rsp, boo
 	//printf("%s RSP/ESP : 0x%X\n", (entry) ? "ENTRY" : "EXIT", rsp);
 #endif
 }
+#endif
 
-KHOOK_API void* GetContext() {
+KHOOK_API void* GetContextPtr() {
 	return g_current_hook.top();
 }
 
@@ -337,9 +366,8 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 	auto loop = g_saved_params.top();
 	if (original) {
 		// Save original value
-		if (loop->original_return_ptr != 0) {
-			// Value has already been saved, what the fuck
-			std::abort();
+		if (loop->original_call_state != CallOriginalState::InProgress) {
+			DEBUG_ABORT_PRINT("Attempting to save original return value, outside of original call window!\n")
 		}
 		if (return_size != 0) {
 			auto new_return = new std::uint8_t[return_size];
@@ -349,6 +377,7 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 			init_copy_return fn = reinterpret_cast<init_copy_return>(init_op);
 			(*fn)(new_return, ptr_to_return);
 		}
+		loop->original_call_state = CallOriginalState::Complete;
 	}
 	if (action > (KHook::Action)loop->action) {
 		loop->action = (std::uintptr_t)action;
@@ -360,9 +389,8 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 			// Free it
 			delete[] reinterpret_cast<std::uint8_t*>(loop->override_return_ptr);
 
-			if (return_size != 0) {
-				// What are you doing ?????
-				std::abort();
+			if (return_size == 0) {
+				DEBUG_ABORT_PRINT("Attempting to save a 0 sized return value as override!\n")
 			}
 		}
 		if (return_size != 0) {
@@ -438,13 +466,17 @@ KHOOK_API void* GetCurrentValuePtr(bool pop) {
 	}
 }
 
+KHOOK_API bool WasOriginalFunctionSkipped() {
+	return g_saved_params.top()->original_call_state == CallOriginalState::CompleteSkipped;
+}
+
 /*void memcpy_detour(std::uintptr_t dst, std::uintptr_t src, std::uintptr_t size) {
 	std::cout << std::hex << "dst 0x" << dst << " src 0x" << src << " size 0x" << size << std::endl;
 }*/
 
 void memcpy_debug(void* dest, const void* src, std::size_t count) {
 	//printf("dst: %p src: %p\n", dest, src);
-	float* fstack = reinterpret_cast<float*>(dest);
+	//float* fstack = reinterpret_cast<float*>(dest);
 	memcpy(dest, src, count);
 	/*printf("Dest ESP: %p | Src ESP: %p\n", dest, src);
 	for (int i = 0; i < 10; i++) {
@@ -494,13 +526,15 @@ void copy_stack(DetourCapsule::AsmJit& jit, std::int32_t offset, std::int32_t st
 #endif
 }
 
-DetourCapsule::DetourCapsule() :
+DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	_in_deletion(false),
 	_start_callbacks(nullptr),
 	_end_callbacks(nullptr),
 	_jit_func_ptr(0),
 	_original_function(0),
-	_stack_size(STACK_SAFETY_BUFFER) {
+	_stack_size(((stack_size + 0xF) & ~0xF)) {
+	DEBUG_PRINT("DetourCapsule::ctor(_stack_size: %hd)\n", _stack_size)
+
 	// Because we want to be call agnostic we must get clever
 	// No register can be used to call a function, so here's the plan
 	// mov rax, 0xStart Address of JIT function
@@ -514,8 +548,8 @@ DetourCapsule::DetourCapsule() :
 #ifdef KHOOK_X64
 	using namespace Asm;
 
-	static auto print_register = [](DetourCapsule::AsmJit& jit, x86_64_Reg reg, const char* name) {
 #ifdef KHOOK_DEBUG_PRINT
+	static auto print_register = [](DetourCapsule::AsmJit& jit, x86_64_Reg reg, const char* name) {
 		WIN_ONLY(jit.sub(rsp, 32));
 		
 		LINUX_ONLY(jit.mov(rdi, reg));
@@ -528,11 +562,10 @@ DetourCapsule::DetourCapsule() :
 		jit.call(rax);
 
 		WIN_ONLY(jit.add(rsp, 32));
-#endif
 	};
-
-	static auto print_rsp = [](DetourCapsule::AsmJit& jit, std::uint32_t offset = 0) {
+#endif
 #ifdef KHOOK_DEBUG_PRINT
+	static auto print_rsp = [](DetourCapsule::AsmJit& jit, std::uint32_t offset = 0) {
 		WIN_ONLY(jit.sub(rsp, 32));
 
 		jit.push(rdi);
@@ -556,8 +589,8 @@ DetourCapsule::DetourCapsule() :
 		jit.pop(rdi);
 
 		WIN_ONLY(jit.add(rsp, 32));
-#endif
 	};
+#endif
 
 	static auto begin_detour = [](DetourCapsule::AsmJit& jit, std::uint32_t offset_to_loop_params, std::uint32_t offset_to_regs, std::uint32_t offset_to_stack, std::int32_t stack_size, DetourCapsule* capsule) {
 		WIN_ONLY(static constexpr size_t shadowspace = 48);
@@ -849,13 +882,15 @@ DetourCapsule::DetourCapsule() :
 	// Call original (maybe)
 	// RBP which we have set much earlier still contains our local variables
 	// it should have been saved across all calls as per linux & win callconvs
-	_jit.mov(rax, rbp(offsetof(AsmLoopDetails, original_call_over)));
-	_jit.test(rax, rax);
-	_jit.jnz(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+	_jit.mov(rax, rbp(offsetof(AsmLoopDetails, original_call_state)));
+	_jit.cmp(rax, (std::int32_t)CallOriginalState::NotReady);
+	_jit.jne(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+		_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::CompleteSkipped);
 		_jit.mov(rax, rbp(offsetof(AsmLoopDetails, action)));
 		_jit.cmp(rax, (std::int32_t)Action::Supersede);
 		_jit.je(INT32_MAX);
 		auto if_not_supersede = _jit.get_outputpos(); {
+			_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::InProgress);
 			// MAKE ORIGINAL CALL
 			_jit.mov(rax, reinterpret_cast<std::uintptr_t>(&_jit_func_ptr));
 			_jit.mov(rax, rax());
@@ -873,12 +908,11 @@ DetourCapsule::DetourCapsule() :
 			_jit.rewrite(make_pre_call_return - sizeof(std::uint32_t), _jit.get_outputpos());
 			peek_rsp(_jit);
 			peek_rbp(_jit);
+			_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::Complete);
 		}
 		_jit.rewrite<std::int32_t>(if_not_supersede - sizeof(std::int32_t), _jit.get_outputpos() - if_not_supersede);
 	}
 	_jit.rewrite<std::int32_t>(jnz - sizeof(std::int32_t), _jit.get_outputpos() - jnz);}
-	// Call original is over
-	_jit.mov(rbp(offsetof(AsmLoopDetails, original_call_over)), true);
 
 	//print_register(_jit, rbp, "POST-RBP");
 	// Prelude to POST LOOP
@@ -981,9 +1015,8 @@ DetourCapsule::DetourCapsule() :
 		jit.pop(eax); // +4	
 #endif
 	};
-
-	static auto print_entry_rsp = [](DetourCapsule::AsmJit& jit, bool b) {
 #ifdef KHOOK_DEBUG_PRINT
+	static auto print_entry_rsp = [](DetourCapsule::AsmJit& jit, bool b) {
 		jit.push(eax); // -4
 
 		jit.lea(eax, esp(4));
@@ -995,8 +1028,8 @@ DetourCapsule::DetourCapsule() :
 		jit.add(esp, sizeof(void*) * 2); // +8
 
 		jit.pop(eax); // +4
-#endif
 	};
+#endif
 
 	static auto begin_detour = [](DetourCapsule::AsmJit& jit, std::uint32_t offset_to_loop_params, std::uint32_t offset_to_regs, std::uint32_t offset_to_stack, std::int32_t stack_size, DetourCapsule* capsule) {
 		auto param_size = sizeof(void*) * 7;
@@ -1276,13 +1309,15 @@ DetourCapsule::DetourCapsule() :
 	// Call original (maybe)
 	// RBP which we have set much earlier still contains our local variables
 	// it should have been saved across all calls as per linux & win callconvs
-	_jit.mov(eax, ebp(offsetof(AsmLoopDetails, original_call_over)));
-	_jit.test(eax, eax);
-	_jit.jnz(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+	_jit.mov(eax, ebp(offsetof(AsmLoopDetails, original_call_state)));
+	_jit.cmp(eax, (std::int32_t)CallOriginalState::NotReady);
+	_jit.jne(INT32_MAX);{auto jnz = _jit.get_outputpos(); {
+		_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::CompleteSkipped);
 		_jit.mov(eax, ebp(offsetof(AsmLoopDetails, action)));
 		_jit.cmp(eax, (std::int32_t)Action::Supersede);
 		_jit.je(INT32_MAX);
 		auto if_not_supersede = _jit.get_outputpos(); {
+			_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::InProgress);
 			// MAKE ORIGINAL CALL
 			_jit.mov(eax, reinterpret_cast<std::uintptr_t>(&_jit_func_ptr));
 			_jit.mov(eax, eax());
@@ -1301,12 +1336,11 @@ DetourCapsule::DetourCapsule() :
 			_jit.rewrite(make_pre_call_return - sizeof(std::uint32_t), _jit.get_outputpos());
 			peek_rsp(_jit);
 			peek_rbp(_jit);
+			_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_state)), (std::uint32_t)CallOriginalState::Complete);
 		}
 		_jit.rewrite<std::int32_t>(if_not_supersede - sizeof(std::int32_t), _jit.get_outputpos() - if_not_supersede);
 	}
 	_jit.rewrite<std::int32_t>(jnz - sizeof(std::int32_t), _jit.get_outputpos() - jnz);}
-	// Call original is over
-	_jit.mov(ebp(offsetof(AsmLoopDetails, original_call_over)), true);
 
 	// Prelude to POST LOOP
 	// Hooks with a post callback are enqueued at the end of linked list
@@ -1380,7 +1414,6 @@ DetourCapsule::DetourCapsule() :
 	//_jit.breakpoint();
 	_jit.retn();
 #endif
-	_jit.SetRE();
 	void* bridge = _jit;
 	_jit_func_ptr = reinterpret_cast<std::uintptr_t>(bridge);
 }
@@ -1395,8 +1428,12 @@ DetourCapsule::~DetourCapsule() {
 	// Iterate through all existing hooks and kill them
 	for (auto& callback : _callbacks) {
 		auto& hook = callback.second;
-		auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook->hook_fn_remove));
-		(((EmptyClass*)(hook->hook_ptr))->*mfp)(callback.first);
+		if (hook->hook_fn_remove) {
+			auto fn = reinterpret_cast<void (*)(HookID_t)>(hook->hook_fn_remove);
+			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), true);
+			fn(callback.first);
+			PushPopCurrentHook(reinterpret_cast<void*>(hook->hook_ptr), false);
+		}
 	}
 	_callbacks.clear();
 	_start_callbacks = nullptr;
@@ -1437,9 +1474,6 @@ bool DetourCapsule::InsertHook(HookID_t id, const DetourCapsule::InsertHookDetai
 		}
 	} else {
 		// Okay iterate through the list and add it in the middle
-		LinkedList* prev = nullptr;
-		LinkedList* next = nullptr;
-
 		LinkedList* curr = _start_callbacks;
 		while (curr && curr->fn_make_post == 0 && curr->next) {
 			curr = curr->next;
@@ -1473,7 +1507,7 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 
 		auto linked_it = _start_callbacks;
 		while (linked_it != hook) {
-			 linked_it = linked_it->next;
+			linked_it = linked_it->next;
 		}
 		
 		if (linked_it->prev) {
@@ -1489,11 +1523,18 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 		if (hook == _end_callbacks) {
 			_end_callbacks = _end_callbacks->prev;
 		}
-		
+
+		auto remove_fn = hook->hook_fn_remove;
+		auto ctx_ptr = hook->hook_ptr;
+
 		_callbacks.erase(it);
 
-		auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook->hook_fn_remove));
-		(((EmptyClass*)(hook->hook_ptr))->*mfp)(id);
+		if (remove_fn) {
+			auto fn = reinterpret_cast<void (*)(HookID_t)>(remove_fn);
+			PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), true);
+			fn(id);
+			PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), false);
+		}
 	}
 }
 
@@ -1596,6 +1637,7 @@ HookID_t __Setup__Hook(
 	void* post,
 	void* make_return,
 	void* make_call_original,
+	std::uint32_t stack_size,
 	bool async,
 	bool (DetourCapsule::*setup_hook)(Args...),
 	Args... args
@@ -1616,7 +1658,7 @@ HookID_t __Setup__Hook(
 		g_hooks_detour_mutex.unlock_shared();
 		g_hooks_detour_mutex.lock();
 
-		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>());
+		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>(stack_size));
 		if (insert.second) {
 			auto detour = insert.first->second.get();
 			// Hook setup failed, so early abort...
@@ -1681,6 +1723,7 @@ KHOOK_API HookID_t SetupHook(
 	void* post,
 	void* make_return,
 	void* make_call_original,
+	unsigned int stack_size,
 	bool async
 ) {
 	return __Setup__Hook(
@@ -1691,6 +1734,7 @@ KHOOK_API HookID_t SetupHook(
 		post,
 		make_return,
 		make_call_original,
+		stack_size,
 		async,
 		&DetourCapsule::SetupAddress,
 		function
@@ -1706,6 +1750,7 @@ KHOOK_API HookID_t SetupVirtualHook(
 	void* post,
 	void* make_return,
 	void* make_call_original,
+	unsigned int stack_size,
 	bool async
 ) {
 	return __Setup__Hook(
@@ -1716,6 +1761,7 @@ KHOOK_API HookID_t SetupVirtualHook(
 		post,
 		make_return,
 		make_call_original,
+		stack_size,
 		async,
 		&DetourCapsule::SetupVirtual,
 		vtable,
@@ -1734,7 +1780,10 @@ KHOOK_API void RemoveHook(
 				continue;
 			}
 
-			// Hook not yet been inserted, remove it right now
+			// Hook not yet been inserted, remove it right now.
+			// Capture the remove-callback details before erase frees the node.
+			auto remove_fn = it->second.hook_fn_remove;
+			auto ctx_ptr = it->second.hook_ptr;
 			g_insert_hooks.erase(it);
 
 			// Disassociate from the detour
@@ -1744,10 +1793,13 @@ KHOOK_API void RemoveHook(
 			}
 
 			// Invoke remove callback
-			auto& hook = it->second;
-			auto mfp = BuildMFP<EmptyClass, void, HookID_t>(reinterpret_cast<void*>(hook.hook_fn_remove));
-			(((EmptyClass*)(hook.hook_ptr))->*mfp)(id);
-			return;
+			if (remove_fn) {
+				auto fn = reinterpret_cast<void (*)(HookID_t)>(remove_fn);
+				PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), true);
+				fn(id);
+				PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), false);
+			}
+			break;
 		}
 	}
 
@@ -1802,6 +1854,10 @@ KHOOK_API void* FindOriginalVirtual(void** vtable, int index) {
 	}
 	// No associated detours, so this is already original function
 	return vtable[index];
+}
+
+KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature) {
+	return reinterpret_cast<void*>(KHook::Ranges::Lookup(reinterpret_cast<std::uintptr_t>(start), size, std::string(signature)));
 }
 
 }

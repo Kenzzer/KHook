@@ -1,5 +1,6 @@
 add_library(khook_lib SHARED
     "detour.cpp"
+    "ranges.cpp"
 )
 
 target_include_directories(khook_lib PUBLIC
