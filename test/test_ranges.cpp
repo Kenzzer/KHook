@@ -95,10 +95,7 @@ std::vector<MemoryRegion> GetReadableRegions()
         if (result == 0)
             break;
 
-        if (mbi.State == MEM_COMMIT &&
-            !(mbi.Protect & PAGE_GUARD) &&
-            !(mbi.Protect & PAGE_NOACCESS) &&
-            IsReadable(mbi.Protect))
+        if (IsReadable(mbi.Protect))
         {
             regions.push_back({
                 reinterpret_cast<uintptr_t>(mbi.BaseAddress),
