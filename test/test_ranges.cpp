@@ -137,7 +137,7 @@ std::uint64_t do_nothing_big(std::uint64_t x)
 
 class RangesTest : public ::testing::Test {
 public:
-    static const constexpr std::size_t SIGNATURE_BYTES = 20;
+    static const constexpr std::size_t SIGNATURE_BYTES = 64;
     RangesTest() {
         // Make a signature of 50 bytes
         _function = reinterpret_cast<void*>(&do_nothing_big);
