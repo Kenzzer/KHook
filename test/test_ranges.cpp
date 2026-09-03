@@ -174,6 +174,8 @@ public:
     void* _function;
 };
 
+#ifndef WIN32
+
 TEST_F(RangesTest, Lookup) {
     EXPECT_EQ(Lookup(), true) << "Failed to sig scan our function";
 }
@@ -213,3 +215,5 @@ TEST_F(RangesTest, LookupWithHook) {
 
     EXPECT_EQ(Lookup(), true) << "Failed to sig scan our function";
 }
+
+#endif
