@@ -74,17 +74,6 @@ std::uintptr_t Lookup(std::uintptr_t start, std::size_t size, const std::string&
 		}
 	}
 
-	/*std::cout << "Searching: " << std::setfill('0');
-	for (int i = 0; i < sequence.size(); i++) {
-		if (sequence[i] == 0xFFFF) {
-			std::cout << "??";
-		} else {
-			std::cout << std::hex << std::setw(2) << sequence[i];
-		}
-		std::cout << " ";
-	}
-	std::cout << std::endl;*/
-
 	std::shared_lock lock(g_mutex);
 
 	auto it = std::upper_bound(
@@ -121,7 +110,6 @@ std::uintptr_t Lookup(std::uintptr_t start, std::size_t size, const std::string&
 				if (read >= (*read_it)->begin && read <= (*read_it)->end) {
 					auto diff = read - (*read_it)->begin;
 					read = reinterpret_cast<std::uintptr_t>(&((*read_it)->og_bytes[diff]));
-					std::cout << " og: " << std::hex << static_cast<std::uint16_t>((*read_it)->og_bytes[diff]);
 				}
 			}
 
@@ -130,7 +118,6 @@ std::uintptr_t Lookup(std::uintptr_t start, std::size_t size, const std::string&
 		}
 
 		if (found) {
-			std::cout << "found" << std::endl;
 			return lookup;
 		}
 	}
