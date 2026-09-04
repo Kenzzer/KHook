@@ -62,7 +62,7 @@ std::uintptr_t Lookup(std::uintptr_t start, std::size_t size, const std::string&
 	for (int i = 0; i <= bytes.size(); i++) {
 		if (i == bytes.size() || bytes[i] == ' ') {
 			// New bytes/end of string. Process what we parsed
-			if (c_string[i - 2] == '?' && c_string[i - 1] == '?') {
+			if ((i == 1 || c_string[i - 2] == '?' ||  c_string[i - 2] == ' ') && c_string[i - 1] == '?') {
 				// Wildcard
 				sequence.push_back(0xFFFF);
 			} else if (p(c_string[i - 1]) != -1 && p(c_string[i - 2]) != -1) {

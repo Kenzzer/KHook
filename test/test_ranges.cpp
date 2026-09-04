@@ -162,6 +162,8 @@ public:
     }
 
     bool Lookup() {
+        std::cout << "Looking up signature: " << _signature << std::endl;
+
         auto regions = GetReadableRegions();
         for (const auto& region : regions) {
             auto ptr = KHook::LookupSignature(reinterpret_cast<void*>(region.start), static_cast<std::size_t>(region.end - region.start), _signature);
@@ -195,6 +197,38 @@ TEST_F(RangesTest, LookupWildcard) {
     _signature[byte2 * 3 + 1] = '?';
     _signature[byte3 * 3 + 0] = '?';
     _signature[byte3 * 3 + 1] = '?';
+
+    EXPECT_EQ(Lookup(), true) << "Failed to sig scan our function";
+}
+
+TEST_F(RangesTest, LookupSingleWildcard) {
+    static const constexpr int byte1 = 21;
+    static_assert(byte1 <= RangesTest::SIGNATURE_BYTES);
+    static const constexpr int byte2 = 28;
+    static_assert(byte2 <= RangesTest::SIGNATURE_BYTES);
+    static const constexpr int byte3 = 16;
+    static_assert(byte3 <= RangesTest::SIGNATURE_BYTES);
+
+    _signature[byte1 * 3 + 0] = '?';
+    _signature[byte1 * 3 + 1] = '?';
+    _signature[byte2 * 3 + 0] = '?';
+    _signature[byte2 * 3 + 1] = '?';
+    _signature[byte3 * 3 + 0] = '?';
+    _signature[byte3 * 3 + 1] = '?';
+
+    char* read = _signature;
+    char* write = _signature;
+
+    // Turn each ?? into just ?
+    while (*read) {
+        *write = *read;
+        if (*read == '?' && *(read + 1) == '?') {
+            read++;
+        }
+        read++;
+        write++;
+    }
+    *write = '\0';
 
     EXPECT_EQ(Lookup(), true) << "Failed to sig scan our function";
 }
