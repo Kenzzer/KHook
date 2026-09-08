@@ -2190,6 +2190,7 @@ public:
 	virtual void* DoRecall(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op) = 0;
 	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) = 0;
 	virtual void* LookupSignature(void* start, std::size_t size, const char* signature) = 0;
+	virtual bool WasOriginalFunctionSkipped() = 0;
 };
 #ifndef KHOOK_STANDALONE
 // KHOOK is exposed by something
@@ -2269,6 +2270,10 @@ KHOOK_API void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::s
 
 KHOOK_API void* LookupSignature(void* start, std::size_t size, const char* signature) {
 	return __exported__khook->LookupSignature(start, size, signature);
+}
+
+KHOOK_API bool WasOriginalFunctionSkipped() {
+	return __exported__khook->WasOriginalFunctionSkipped();
 }
 
 #endif
