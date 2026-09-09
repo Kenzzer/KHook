@@ -642,14 +642,19 @@ public:
 		return _Configure(reinterpret_cast<const void*>(function));
 	}
 
+	inline void Configure(void* address) {
+		return _Configure(reinterpret_cast<const void*>(address));
+	}
+
+	inline void Configure(const void* address) {
+		return _Configure(address);
+	}
+
 	RETURN CallOriginal(ARGS... args) {
 		RETURN (*function)(ARGS...) = (decltype(function))::KHook::FindOriginal((void*)_hooked_addr);
 		return (*function)(args...);
 	}
 protected:
-	inline void _Configure(void* address) {
-		return _Configure(reinterpret_cast<const void*>(address));
-	}
 
 	void _Configure(const void* address) {
 		if (address == nullptr || _in_deletion) {
