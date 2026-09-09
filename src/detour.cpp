@@ -38,8 +38,8 @@ static const x86_64_Reg reg[] = { rdi, rsi, rdx, rcx, r8, r9 }; // 48 bytes (so 
 // Save XMM0-XMM7
 static const x8664FloatReg float_reg[] = { xmm0, xmm1, xmm2, xmm3, xmm4, xmm5, xmm6, xmm7 }; // Each register is 16 bytes
 #endif
-static constexpr auto reg_count = sizeof(reg) / sizeof(decltype(*reg));
-static constexpr auto float_reg_count = sizeof(float_reg) / sizeof(decltype(*float_reg));
+static constexpr auto reg_count = std::size(reg);
+static constexpr auto float_reg_count = std::size(float_reg);
 static_assert((reg_count * 8) % 16 == 0);
 static_assert((float_reg_count * 16) % 16 == 0);
 #else
@@ -52,7 +52,7 @@ static_assert((float_reg_count * 16) % 16 == 0);
 #endif
 
 static const x86_Reg reg[] = { eax, eax, eax, ecx, edx, ebx, esi, edi };
-static constexpr auto reg_count = sizeof(reg) / sizeof(decltype(*reg));
+static constexpr auto reg_count = std::size(reg);
 static_assert((reg_count * 4) % 16 == 0);
 #endif
 
