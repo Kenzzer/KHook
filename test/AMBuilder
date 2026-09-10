@@ -32,7 +32,8 @@ for compiler in TestRunner.all_targets:
     'test_static_hook.cpp',
     'test_virtuals.cpp',
     'test_virtual_hook.cpp',
-    'test_ranges.cpp'
+    'test_ranges.cpp',
+    'test_hook_removal.cpp'
   ]
 
   if compiler.like('gcc'):

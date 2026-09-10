@@ -1548,7 +1548,7 @@ std::unordered_map<HookID_t, DetourCapsule*> g_associated_hooks;
 std::mutex g_insert_hooks_mutex;
 std::list<std::pair<HookID_t, DetourCapsule::InsertHookDetails>> g_insert_hooks;
 std::mutex g_delete_hooks_mutex;
-std::unordered_set<HookID_t> g_delete_hooks;
+std::unordered_map<HookID_t, std::pair<void (*)(KHook::HookID_t, void*), void*>> g_delete_hooks;
 
 bool __InsertHook_Sync(HookID_t id, const DetourCapsule::InsertHookDetails& details) {
 	//printf("__InsertHook_Sync -- %d\n", gettid());
@@ -1612,7 +1612,9 @@ std::thread g_DeleteThread([]{
 		g_delete_hooks_mutex.lock();
 		while (g_delete_hooks.begin() != g_delete_hooks.end()) {
 			auto it = g_delete_hooks.begin();
-			HookID_t id = *it;
+			HookID_t id = it->first;
+			auto context = it->second.second;
+			auto remove_fn = it->second.first;
 			g_delete_hooks.erase(it);
 
 			// Let other threads add more hooks to delete
@@ -1622,6 +1624,10 @@ std::thread g_DeleteThread([]{
 
 			// Relock thread for loop condition
 			g_delete_hooks_mutex.lock();
+
+			if (remove_fn) {
+				remove_fn(id, context);
+			}
 		}
 		g_delete_hooks_mutex.unlock();
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
@@ -1771,7 +1777,9 @@ KHOOK_API HookID_t SetupVirtualHook(
 
 KHOOK_API void RemoveHook(
 	HookID_t id,
-	bool async
+	bool async,
+	void (*hook_removal_fn)(KHook::HookID_t, void*),
+	void* context
 ) {
 	{
 		std::lock_guard guard(g_insert_hooks_mutex);
@@ -1799,6 +1807,10 @@ KHOOK_API void RemoveHook(
 				fn(id);
 				PushPopCurrentHook(reinterpret_cast<void*>(ctx_ptr), false);
 			}
+
+			if (hook_removal_fn) {
+				hook_removal_fn(id, context);
+			}
 			break;
 		}
 	}
@@ -1813,17 +1825,25 @@ KHOOK_API void RemoveHook(
 		}
 
 		g_delete_hooks_mutex.lock();
-		g_delete_hooks.insert(id);
+		g_delete_hooks.emplace(id, std::make_pair(hook_removal_fn, context));
 		g_delete_hooks_mutex.unlock();
 
 		g_associated_hooks_mutex.unlock_shared();
 	} else {
 		__RemoveHook_Sync(id);
+
+		if (hook_removal_fn) {
+			hook_removal_fn(id, context);
+		}
 	}
 }
 
 KHOOK_API void Shutdown(
 ) {
+	if (g_TerminateWorker) {
+		return;
+	}
+
 	g_hooks_detour_mutex.lock();
 	g_associated_hooks_mutex.lock();
 	g_associated_hooks.clear();

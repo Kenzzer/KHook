@@ -256,8 +256,10 @@ KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, voi
  * 
  * @param id The hook id.
  * @param async By default set to false. If set to true the hook will be removed asynchronously, you should make sure the associated functions and pointer are still loaded in memory until the hook is removed.
-*/
-KHOOK_API void RemoveHook(HookID_t id, bool async = false);
+ * @param hook_removal_fn Function to call when the hook is removed.
+ * @param context Context pointer to provide in the removal callback.
+ */
+KHOOK_API void RemoveHook(HookID_t id, bool async = false, void (*hook_removal_fn)(HookID_t, void*) = nullptr, void* context = nullptr);
 
 /**
  * Thread local function, only to be called under KHook callbacks. It returns the context pointer provided during SetupHook.
@@ -2183,7 +2185,7 @@ class IKHook {
 public:
 	virtual HookID_t SetupHook(void* function, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
 	virtual HookID_t SetupVirtualHook(void** vtable, int index, void* context, void* removed_function, void* pre, void* post, void* make_return, void* make_call_original, unsigned int stack_size, bool async = false) = 0;
-	virtual void RemoveHook(HookID_t id, bool async = false) = 0;
+	virtual void RemoveHook(HookID_t id, bool async = false, void (*hook_removal_fn)(HookID_t, void*) = nullptr, void* context = nullptr) = 0;
 	virtual void* GetContextPtr() = 0;
 	virtual void* GetOriginalFunction() = 0;
 	virtual void* GetOriginalValuePtr() = 0;
@@ -2229,8 +2231,8 @@ KHOOK_API HookID_t SetupVirtualHook(void** vtable, int index, void* context, voi
 	return __exported__khook->SetupVirtualHook(vtable, index, context, removed_function, pre, post, make_return, make_call_original, stack_size, async);
 }
 
-KHOOK_API void RemoveHook(HookID_t id, bool async) {
-	return __exported__khook->RemoveHook(id, async);
+KHOOK_API void RemoveHook(HookID_t id, bool async, void (*hook_removal_fn)(HookID_t, void*), void* context) {
+	return __exported__khook->RemoveHook(id, async, hook_removal_fn, context);
 }
 
 KHOOK_API void* GetContextPtr() {
