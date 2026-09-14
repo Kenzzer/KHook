@@ -76,12 +76,12 @@ std::uintptr_t Lookup(std::uintptr_t start, std::size_t size, const std::string&
 
 	std::shared_lock lock(g_mutex);
 
-	auto it = std::upper_bound(
+	auto it = std::lower_bound(
 	g_ranges.begin(),
 	g_ranges.end(),
-	start + size,
-	[start](std::uintptr_t v, const std::unique_ptr<Range>& r) {
-		return r->begin <= v && r->begin >= start;
+	start,
+	[](const std::unique_ptr<Range>& r, std::uintptr_t address) {
+		return r->end < address;
 	});
 
 	const auto& it_end = g_ranges.end();
