@@ -1538,98 +1538,106 @@ void DetourCapsule::RemoveHook(HookID_t id) {
 	}
 }
 
-std::mutex g_hook_id_mutex;
-HookID_t g_lastest_hook_id = 0;
+struct GlobalState {
+	std::mutex hook_id_mutex;
+	HookID_t lastest_hook_id = 0;
 
-std::shared_mutex g_hooks_detour_mutex;
-std::unordered_map<void*, std::unique_ptr<DetourCapsule>> g_hooks_detour;
-std::shared_mutex g_associated_hooks_mutex;
-std::unordered_map<HookID_t, DetourCapsule*> g_associated_hooks;
-std::mutex g_insert_hooks_mutex;
-std::list<std::pair<HookID_t, DetourCapsule::InsertHookDetails>> g_insert_hooks;
-std::mutex g_delete_hooks_mutex;
-std::unordered_map<HookID_t, std::pair<void (*)(KHook::HookID_t, void*), void*>> g_delete_hooks;
+	std::shared_mutex hooks_detour_mutex;
+	std::unordered_map<void*, std::unique_ptr<DetourCapsule>> hooks_detour;
+	std::shared_mutex associated_hooks_mutex;
+	std::unordered_map<HookID_t, DetourCapsule*> associated_hooks;
+	std::mutex insert_hooks_mutex;
+	std::list<std::pair<HookID_t, DetourCapsule::InsertHookDetails>> insert_hooks;
+	std::mutex delete_hooks_mutex;
+	std::unordered_map<HookID_t, std::pair<void (*)(KHook::HookID_t, void*), void*>> delete_hooks;
+};
+
+static GlobalState& globals()
+{
+    static GlobalState* globals = new GlobalState();
+    return *globals;
+}
 
 bool __InsertHook_Sync(HookID_t id, const DetourCapsule::InsertHookDetails& details) {
 	//printf("__InsertHook_Sync -- %d\n", gettid());
-	g_associated_hooks_mutex.lock_shared();
-	auto it = g_associated_hooks.find(id);
-	if (it == g_associated_hooks.end()) {
-		g_associated_hooks_mutex.unlock_shared();
+	globals().associated_hooks_mutex.lock_shared();
+	auto it = globals().associated_hooks.find(id);
+	if (it == globals().associated_hooks.end()) {
+		globals().associated_hooks_mutex.unlock_shared();
 		return true;
 	}
 	//printf("__InsertHook_Sync -- %d -- InsertHook\n", gettid());
 	bool ret = it->second->InsertHook(id, details);
 	//printf("__InsertHook_Sync -- %d -- InsertHook -- over\n", gettid());
-	g_associated_hooks_mutex.unlock_shared();
+	globals().associated_hooks_mutex.unlock_shared();
 	return ret;
 }
 
 void __RemoveHook_Sync(HookID_t id) {
-	std::lock_guard associated_guard(g_associated_hooks_mutex);
-	auto it = g_associated_hooks.find(id);
-	if (it == g_associated_hooks.end()) {
+	std::lock_guard associated_guard(globals().associated_hooks_mutex);
+	auto it = globals().associated_hooks.find(id);
+	if (it == globals().associated_hooks.end()) {
 		return;
 	}
 
 	it->second->RemoveHook(id);
 
-	g_associated_hooks.erase(id);
+	globals().associated_hooks.erase(id);
 }
 
 // Worker thread that insert/deletes hook
-bool g_TerminateWorker = false;
+bool g_terminate_worker = false;
 
-std::thread g_InsertThread([]{
-	while (!g_TerminateWorker) {
-		g_insert_hooks_mutex.lock();
-		if (g_insert_hooks.begin() != g_insert_hooks.end()) {
-			auto it = g_insert_hooks.begin();
+std::thread g_insert_thread([]{
+	while (!g_terminate_worker) {
+		globals().insert_hooks_mutex.lock();
+		if (globals().insert_hooks.begin() != globals().insert_hooks.end()) {
+			auto it = globals().insert_hooks.begin();
 			auto id = it->first;
 			auto details = it->second;
-			g_insert_hooks.erase(it);
+			globals().insert_hooks.erase(it);
 	
 			// Let other threads add more hooks to insert
-			g_insert_hooks_mutex.unlock();
+			globals().insert_hooks_mutex.unlock();
 	
 			bool ret = __InsertHook_Sync(id, details);
 	
 			// Relock thread for loop condition
-			g_insert_hooks_mutex.lock();
+			globals().insert_hooks_mutex.lock();
 
 			// Insert failed, try again a little later
 			if (!ret) {
-				g_insert_hooks.push_back(std::make_pair(id, details));
+				globals().insert_hooks.push_back(std::make_pair(id, details));
 			}
 		}
-		g_insert_hooks_mutex.unlock();
+		globals().insert_hooks_mutex.unlock();
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 });
 
-std::thread g_DeleteThread([]{
-	while (!g_TerminateWorker) {
-		g_delete_hooks_mutex.lock();
-		while (g_delete_hooks.begin() != g_delete_hooks.end()) {
-			auto it = g_delete_hooks.begin();
+std::thread g_delete_thread([]{
+	while (!g_terminate_worker) {
+		globals().delete_hooks_mutex.lock();
+		while (globals().delete_hooks.begin() != globals().delete_hooks.end()) {
+			auto it = globals().delete_hooks.begin();
 			HookID_t id = it->first;
 			auto context = it->second.second;
 			auto remove_fn = it->second.first;
-			g_delete_hooks.erase(it);
+			globals().delete_hooks.erase(it);
 
 			// Let other threads add more hooks to delete
-			g_delete_hooks_mutex.unlock();
+			globals().delete_hooks_mutex.unlock();
 
 			__RemoveHook_Sync(id);
 
 			// Relock thread for loop condition
-			g_delete_hooks_mutex.lock();
+			globals().delete_hooks_mutex.lock();
 
 			if (remove_fn) {
 				remove_fn(id, context);
 			}
 		}
-		g_delete_hooks_mutex.unlock();
+		globals().delete_hooks_mutex.unlock();
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 });
@@ -1782,8 +1790,8 @@ KHOOK_API void RemoveHook(
 	void* context
 ) {
 	{
-		std::lock_guard guard(g_insert_hooks_mutex);
-		for (auto it = g_insert_hooks.begin(); it != g_insert_hooks.end(); it++) {
+		std::lock_guard guard(globals().insert_hooks_mutex);
+		for (auto it = globals().insert_hooks.begin(); it != globals().insert_hooks.end(); it++) {
 			if ((*it).first != id) {
 				continue;
 			}
@@ -1792,12 +1800,12 @@ KHOOK_API void RemoveHook(
 			// Capture the remove-callback details before erase frees the node.
 			auto remove_fn = it->second.hook_fn_remove;
 			auto ctx_ptr = it->second.hook_ptr;
-			g_insert_hooks.erase(it);
+			globals().insert_hooks.erase(it);
 
 			// Disassociate from the detour
 			{
-				std::lock_guard guard_associated(g_associated_hooks_mutex);
-				g_associated_hooks.erase(id);
+				std::lock_guard guard_associated(globals().associated_hooks_mutex);
+				globals().associated_hooks.erase(id);
 			}
 
 			// Invoke remove callback
@@ -1816,19 +1824,19 @@ KHOOK_API void RemoveHook(
 	}
 
 	if (async) {
-		g_associated_hooks_mutex.lock_shared();
+		globals().associated_hooks_mutex.lock_shared();
 		// If not associated still, early return
-		auto it = g_associated_hooks.find(id);
-		if (it == g_associated_hooks.end()) {
-			g_associated_hooks_mutex.unlock_shared();
+		auto it = globals().associated_hooks.find(id);
+		if (it == globals().associated_hooks.end()) {
+			globals().associated_hooks_mutex.unlock_shared();
 			return;
 		}
 
-		g_delete_hooks_mutex.lock();
-		g_delete_hooks.emplace(id, std::make_pair(hook_removal_fn, context));
-		g_delete_hooks_mutex.unlock();
+		globals().delete_hooks_mutex.lock();
+		globals().delete_hooks.emplace(id, std::make_pair(hook_removal_fn, context));
+		globals().delete_hooks_mutex.unlock();
 
-		g_associated_hooks_mutex.unlock_shared();
+		globals().associated_hooks_mutex.unlock_shared();
 	} else {
 		__RemoveHook_Sync(id);
 
@@ -1840,26 +1848,26 @@ KHOOK_API void RemoveHook(
 
 KHOOK_API void Shutdown(
 ) {
-	if (g_TerminateWorker) {
+	if (g_terminate_worker) {
 		return;
 	}
 
-	g_hooks_detour_mutex.lock();
-	g_associated_hooks_mutex.lock();
-	g_associated_hooks.clear();
-	g_hooks_detour.clear();
-	g_hooks_detour_mutex.unlock();
-	g_associated_hooks_mutex.unlock();
+	globals().hooks_detour_mutex.lock();
+	globals().associated_hooks_mutex.lock();
+	globals().associated_hooks.clear();
+	globals().hooks_detour.clear();
+	globals().hooks_detour_mutex.unlock();
+	globals().associated_hooks_mutex.unlock();
 
-	g_TerminateWorker = true;
-	g_InsertThread.join();
-	g_DeleteThread.join();
+	g_terminate_worker = true;
+	g_insert_thread.join();
+	g_delete_thread.join();
 }
 
 KHOOK_API void* FindOriginal(void* function) {
-	std::shared_lock guard(g_hooks_detour_mutex);
-	auto it = g_hooks_detour.find(function);
-	if (it != g_hooks_detour.end()) {
+	std::shared_lock guard(globals().hooks_detour_mutex);
+	auto it = globals().hooks_detour.find(function);
+	if (it != globals().hooks_detour.end()) {
 		return (*it).second->GetOriginal();
 	}
 	// No associated detours, so this is already original function
@@ -1867,9 +1875,9 @@ KHOOK_API void* FindOriginal(void* function) {
 }
 
 KHOOK_API void* FindOriginalVirtual(void** vtable, int index) {
-	std::shared_lock guard(g_hooks_detour_mutex);
-	auto it = g_hooks_detour.find((vtable + index));
-	if (it != g_hooks_detour.end()) {
+	std::shared_lock guard(globals().hooks_detour_mutex);
+	auto it = globals().hooks_detour.find((vtable + index));
+	if (it != globals().hooks_detour.end()) {
 		return (*it).second->GetOriginal();
 	}
 	// No associated detours, so this is already original function
