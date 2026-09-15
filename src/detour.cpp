@@ -1666,22 +1666,22 @@ HookID_t __Setup__Hook(
 	details.fn_make_return = reinterpret_cast<std::uintptr_t>(make_return);
 	details.fn_make_call_original = reinterpret_cast<std::uintptr_t>(make_call_original);
 
-	g_hooks_detour_mutex.lock_shared();
-	auto it = g_hooks_detour.find(unique_identifier);
-	if (it == g_hooks_detour.end()) {
-		g_hooks_detour_mutex.unlock_shared();
-		g_hooks_detour_mutex.lock();
+	globals().hooks_detour_mutex.lock_shared();
+	auto it = globals().hooks_detour.find(unique_identifier);
+	if (it == globals().hooks_detour.end()) {
+		globals().hooks_detour_mutex.unlock_shared();
+		globals().hooks_detour_mutex.lock();
 
-		auto insert = g_hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>(stack_size));
+		auto insert = globals().hooks_detour.insert_or_assign(unique_identifier, std::make_unique<DetourCapsule>(stack_size));
 		if (insert.second) {
 			auto detour = insert.first->second.get();
 			// Hook setup failed, so early abort...
 			if ((detour->*setup_hook)(std::forward<Args>(args)...) == false) {
-				g_hooks_detour.erase(unique_identifier);
+				globals().hooks_detour.erase(unique_identifier);
 				insert.second = false;
 			}
 		}
-		g_hooks_detour_mutex.unlock();
+		globals().hooks_detour_mutex.unlock();
 
 		if (!insert.second) {
 			return INVALID_HOOK;
@@ -1690,23 +1690,23 @@ HookID_t __Setup__Hook(
 		// Sync insert the hook as well
 		async = false;
 	} else {
-		g_hooks_detour_mutex.unlock_shared();
+		globals().hooks_detour_mutex.unlock_shared();
 	}
 
-	g_hooks_detour_mutex.lock_shared();
-	it = g_hooks_detour.find(unique_identifier);
-	if (it != g_hooks_detour.end()) {
+	globals().hooks_detour_mutex.lock_shared();
+	it = globals().hooks_detour.find(unique_identifier);
+	if (it != globals().hooks_detour.end()) {
 
 		HookID_t id = 0;
 		{
-			std::lock_guard generator(g_hook_id_mutex);
-			id = g_lastest_hook_id++;
+			std::lock_guard generator(globals().hook_id_mutex);
+			id = globals().lastest_hook_id++;
 		}
 
 		// Associate hook with detour
 		{
-			std::lock_guard associated_guard(g_associated_hooks_mutex);
-			g_associated_hooks[id] = it->second.get();
+			std::lock_guard associated_guard(globals().associated_hooks_mutex);
+			globals().associated_hooks[id] = it->second.get();
 		}
 
 		if (!async) {
@@ -1717,15 +1717,15 @@ HookID_t __Setup__Hook(
 		}
 
 		if (async) {
-			std::lock_guard insert_guard(g_insert_hooks_mutex);
-			g_insert_hooks.push_back(std::make_pair(id, details));
+			std::lock_guard insert_guard(globals().insert_hooks_mutex);
+			globals().insert_hooks.push_back(std::make_pair(id, details));
 		}
 
-		g_hooks_detour_mutex.unlock_shared();
+		globals().hooks_detour_mutex.unlock_shared();
 		return id;
 	}
 
-	g_hooks_detour_mutex.unlock_shared();
+	globals().hooks_detour_mutex.unlock_shared();
 	return INVALID_HOOK;
 }
 
