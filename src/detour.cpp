@@ -1552,11 +1552,8 @@ struct GlobalState {
 	std::unordered_map<HookID_t, std::pair<void (*)(KHook::HookID_t, void*), void*>> delete_hooks;
 };
 
-static GlobalState& globals()
-{
-    static GlobalState* globals = new GlobalState();
-    return *globals;
-}
+static GlobalState* g_globals = new GlobalState();
+static GlobalState& globals() { return *g_globals; }
 
 bool __InsertHook_Sync(HookID_t id, const DetourCapsule::InsertHookDetails& details) {
 	//printf("__InsertHook_Sync -- %d\n", gettid());
