@@ -1613,7 +1613,7 @@ std::thread g_insert_thread([]{
 });
 
 std::thread g_delete_thread([]{
-	while (!g_terminate_worker) {
+	while (true) {
 		globals().delete_hooks_mutex.lock();
 		while (globals().delete_hooks.begin() != globals().delete_hooks.end()) {
 			auto it = globals().delete_hooks.begin();
@@ -1635,6 +1635,10 @@ std::thread g_delete_thread([]{
 			}
 		}
 		globals().delete_hooks_mutex.unlock();
+
+		if(g_terminate_worker && globals().delete_hooks.size() == 0)
+			break;
+
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 });
