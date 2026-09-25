@@ -4,6 +4,7 @@
 #include <stack>
 #include <iostream>
 #include <list>
+#include <atomic>
 
 namespace KHook {
 
@@ -1583,7 +1584,7 @@ void __RemoveHook_Sync(HookID_t id) {
 }
 
 // Worker thread that insert/deletes hook
-bool g_terminate_worker = false;
+std::atomic<bool> g_terminate_worker = false;
 
 std::thread g_insert_thread([]{
 	while (!g_terminate_worker) {
@@ -1613,7 +1614,7 @@ std::thread g_insert_thread([]{
 });
 
 std::thread g_delete_thread([]{
-	while (!g_terminate_worker) {
+	while (true) {
 		globals().delete_hooks_mutex.lock();
 		while (globals().delete_hooks.begin() != globals().delete_hooks.end()) {
 			auto it = globals().delete_hooks.begin();
@@ -1634,7 +1635,15 @@ std::thread g_delete_thread([]{
 				remove_fn(id, context);
 			}
 		}
+
+		if(g_terminate_worker && globals().delete_hooks.empty())
+		{
+			globals().delete_hooks_mutex.unlock();
+			break;
+		}
+
 		globals().delete_hooks_mutex.unlock();
+
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
 });
