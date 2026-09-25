@@ -4,6 +4,7 @@
 #include <stack>
 #include <iostream>
 #include <list>
+#include <atomic>
 
 namespace KHook {
 
@@ -1583,7 +1584,7 @@ void __RemoveHook_Sync(HookID_t id) {
 }
 
 // Worker thread that insert/deletes hook
-bool g_terminate_worker = false;
+std::atomic<bool> g_terminate_worker = false;
 
 std::thread g_insert_thread([]{
 	while (!g_terminate_worker) {
