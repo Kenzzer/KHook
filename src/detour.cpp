@@ -1634,10 +1634,14 @@ std::thread g_delete_thread([]{
 				remove_fn(id, context);
 			}
 		}
-		globals().delete_hooks_mutex.unlock();
 
-		if(g_terminate_worker && globals().delete_hooks.size() == 0)
+		if(g_terminate_worker && globals().delete_hooks.empty())
+		{
+			globals().delete_hooks_mutex.unlock();
 			break;
+		}
+
+		globals().delete_hooks_mutex.unlock();
 
 		std::this_thread::sleep_for(std::chrono::milliseconds(5));
 	}
