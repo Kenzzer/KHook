@@ -36,6 +36,24 @@
 #define KHOOK_API inline
 #endif
 
+// Versioning of the contract between a consumer (compiled against this header)
+// and the IKHook implementation it is handed at runtime, in the spirit of
+// SourceHook's SH_IFACE_VERSION / SH_IMPL_VERSION.
+//
+// KHOOK_IFACE_VERSION: bump on any breaking change to that contract -- the
+// IKHook vtable layout, a method signature, or how the implementation invokes
+// the callbacks and return value helpers this header generates. Consumers and
+// implementations must agree on it exactly.
+//
+// KHOOK_IMPL_VERSION: bump when the implementation gains behaviour this header
+// starts relying on without breaking older consumers. A consumer requires an
+// implementation at least as new as the header it was compiled against.
+//
+// Implementation-only changes that leave both untouched need no bump, and
+// consumers built against an older header keep working.
+#define KHOOK_IFACE_VERSION 1
+#define KHOOK_IMPL_VERSION 1
+
 namespace KHook {
 
 enum class Action : std::uint8_t {
@@ -2198,7 +2216,23 @@ public:
 	virtual void SaveReturnValue(KHook::Action action, void* ptr_to_return, std::size_t return_size, void* init_op, void* deinit_op, bool original) = 0;
 	virtual void* LookupSignature(void* start, std::size_t size, const char* signature) = 0;
 	virtual bool WasOriginalFunctionSkipped() = 0;
+
+	// Added last so the vtable stays compatible with consumers built before
+	// versioning existed. An implementation reports the KHOOK_IFACE_VERSION /
+	// KHOOK_IMPL_VERSION of the header it was compiled against. Only call these
+	// on an implementation known to provide them (see IsCompatible).
+	virtual int GetIfaceVersion() = 0;
+	virtual int GetImplVersion() = 0;
 };
+
+// Whether a consumer compiled against this header can use the given
+// implementation: same interface version, implementation at least as new.
+inline bool IsCompatible(IKHook* khook) {
+	return khook != nullptr
+		&& khook->GetIfaceVersion() == KHOOK_IFACE_VERSION
+		&& khook->GetImplVersion() >= KHOOK_IMPL_VERSION;
+}
+
 #ifndef KHOOK_STANDALONE
 // KHOOK is exposed by something
 extern IKHook* __exported__khook;

@@ -88,6 +88,17 @@ All hooks can be configured through the use of the function `Configure`.
 > [!NOTE] 
 > Because `KHook::Virtual` is configured with a vtable index and not a function address the detour can't be immediately created. `KHook::Virtual::Add(DetourClassName* thisPtr)` and `KHook::Virtual::Remove(DetourClassName* thisPtr)` must be called.
 
+## Versioning
+
+When KHook is exposed by a host (e.g. Metamod:Source), consumers are compiled against `khook.hpp` while the implementation behind `KHook::IKHook` lives in the host, and the two are not necessarily built from the same KHook commit. `khook.hpp` therefore carries two version numbers, in the spirit of SourceHook's `SH_IFACE_VERSION` / `SH_IMPL_VERSION` :
+- `KHOOK_IFACE_VERSION` <br/> Bumped on any breaking change to the consumer/implementation contract (`IKHook` layout or signatures, how the implementation invokes the generated callbacks). Must match exactly.
+- `KHOOK_IMPL_VERSION` <br/> Bumped when the implementation gains behaviour the header relies on. The implementation must be at least as new as the consumer's header.
+
+The implementation reports the versions it was compiled with through `IKHook::GetIfaceVersion()` and `IKHook::GetImplVersion()`, and `KHook::IsCompatible(IKHook*)` performs the check for a consumer. Changes to the implementation alone require no bump, so consumers keep loading across such updates.
+
+> [!WARNING]
+> Both methods were appended to `IKHook`. Only call them (or `KHook::IsCompatible`) on an implementation known to be recent enough to provide them, e.g. by checking the host's own API version first.
+
 ## Testing
 
 The test suite uses the [GoogleTest](https://github.com/google/googletest) framework and can be built by configuring AMBuild with the `--enable-tests` flag. Tests must be executed in parallel with [gtest-parallel](https://github.com/google/gtest-parallel) in their own processes to avoid conflicts with each other.
