@@ -1835,6 +1835,10 @@ KHOOK_API void RemoveHook(
 		auto it = globals().associated_hooks.find(id);
 		if (it == globals().associated_hooks.end()) {
 			globals().associated_hooks_mutex.unlock_shared();
+
+			if (hook_removal_fn) {
+				hook_removal_fn(id, context);
+			}
 			return;
 		}
 
