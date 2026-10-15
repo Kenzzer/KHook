@@ -1628,12 +1628,12 @@ std::thread g_delete_thread([]{
 
 			__RemoveHook_Sync(id);
 
-			// Relock thread for loop condition
-			globals().delete_hooks_mutex.lock();
-
 			if (remove_fn) {
 				remove_fn(id, context);
 			}
+
+			// Relock thread for loop condition
+			globals().delete_hooks_mutex.lock();
 		}
 
 		if(g_terminate_worker && globals().delete_hooks.empty())
