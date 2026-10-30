@@ -30,6 +30,21 @@ namespace KHook
 			EDI =  7,
 		};
 		
+		enum x87Reg : std::uint8_t {
+			ST0 = 0,
+			ST1 = 1,
+			ST2 = 2,
+			ST3 = 3,
+			ST4 = 4,
+			ST5 = 5,
+			ST6 = 6,
+			ST7 = 7
+		};
+
+		enum class x87Size : std::uint8_t {
+			Float32, Float64, Float80
+		};
+
 		enum MOD_MODRM : std::uint8_t {
 			DISP0 = 0b00,
 			DISP8 = 0b01,
@@ -106,6 +121,23 @@ namespace KHook
 		static const x86_Reg ebp = { x86Reg::EBP };
 		static const x86_Reg esi = { x86Reg::ESI };
 		static const x86_Reg edi = { x86Reg::EDI };
+
+		class x87_Reg {
+		public:
+			constexpr x87_Reg(x87Reg op) : code(op) { }
+			constexpr operator x87Reg() const { return code; }
+		protected:
+			x87Reg code;
+		};
+
+		static const x87_Reg st0 = { x87Reg::ST0 };
+		static const x87_Reg st1 = { x87Reg::ST1 };
+		static const x87_Reg st2 = { x87Reg::ST2 };
+		static const x87_Reg st3 = { x87Reg::ST3 };
+		static const x87_Reg st4 = { x87Reg::ST4 };
+		static const x87_Reg st5 = { x87Reg::ST5 };
+		static const x87_Reg st6 = { x87Reg::ST6 };
+		static const x87_Reg st7 = { x87Reg::ST7 };
 
 		constexpr inline std::uint8_t modrm(x86Reg reg, x86Reg rm) {
 			return (MOD_MODRM::REG << 6) | ((reg & 0x7) << 3) | (rm & 0x7);
@@ -185,6 +217,150 @@ namespace KHook
 		
 		class x86_Jit : public GenBuffer {
 		public:
+			// Memory sizes are explicit: x87 memory operands carry no size information.
+			void fld(x86_RegRm src, x87Size size) {
+				this->write_ubyte(size == x87Size::Float32 ? 0xD9 :
+					size == x87Size::Float64 ? 0xDD : 0xDB);
+				src.write_modrm(this, static_cast<x86Reg>(size == x87Size::Float80 ? 5 : 0));
+			}
+
+			// FST has no 80-bit memory encoding; use FSTP for an 80-bit store.
+			void fst(x86_RegRm dst, x87Size size) {
+				assertm(size != x87Size::Float80, "FST requires Float32 or Float64");
+				if (size == x87Size::Float80) return;
+				this->write_ubyte(size == x87Size::Float32 ? 0xD9 : 0xDD);
+				dst.write_modrm(this, static_cast<x86Reg>(2));
+			}
+
+			void fstp(x86_RegRm dst, x87Size size) {
+				this->write_ubyte(size == x87Size::Float32 ? 0xD9 :
+					size == x87Size::Float64 ? 0xDD : 0xDB);
+				dst.write_modrm(this, static_cast<x86Reg>(size == x87Size::Float80 ? 7 : 3));
+			}
+
+			void fld(x87_Reg reg) {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xC0 + reg);
+			}
+
+			void fst(x87_Reg reg) {
+				this->write_ubyte(0xDD);
+				this->write_ubyte(0xD0 + reg);
+			}
+
+			void fstp(x87_Reg reg) {
+				this->write_ubyte(0xDD);
+				this->write_ubyte(0xD8 + reg);
+			}
+
+			void fxch(x87_Reg reg) {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xC8 + reg);
+			}
+
+			void ffree(x87_Reg reg) {
+				this->write_ubyte(0xDD);
+				this->write_ubyte(0xC0 + reg);
+			}
+
+			// Non-popping arithmetic: ST(0) = ST(0) op ST(reg).
+			void fadd(x87_Reg reg) {
+				this->write_ubyte(0xD8);
+				this->write_ubyte(0xC0 + reg);
+			}
+
+			void fmul(x87_Reg reg) {
+				this->write_ubyte(0xD8);
+				this->write_ubyte(0xC8 + reg);
+			}
+
+			void fsub(x87_Reg reg) {
+				this->write_ubyte(0xD8);
+				this->write_ubyte(0xE0 + reg);
+			}
+
+			void fsubr(x87_Reg reg) {
+				this->write_ubyte(0xD8);
+				this->write_ubyte(0xE8 + reg);
+			}
+
+			void fdiv(x87_Reg reg) {
+				this->write_ubyte(0xD8);
+				this->write_ubyte(0xF0 + reg);
+			}
+
+			void fdivr(x87_Reg reg) {
+				this->write_ubyte(0xD8);
+				this->write_ubyte(0xF8 + reg);
+			}
+
+			// Popping arithmetic: ST(reg) = ST(reg) op ST(0), then pop.
+			void faddp(x87_Reg reg) {
+				this->write_ubyte(0xDE);
+				this->write_ubyte(0xC0 + reg);
+			}
+
+			void fmulp(x87_Reg reg) {
+				this->write_ubyte(0xDE);
+				this->write_ubyte(0xC8 + reg);
+			}
+
+			void fsubp(x87_Reg reg) {
+				this->write_ubyte(0xDE);
+				this->write_ubyte(0xE8 + reg);
+			}
+
+			void fsubrp(x87_Reg reg) {
+				this->write_ubyte(0xDE);
+				this->write_ubyte(0xE0 + reg);
+			}
+
+			void fdivp(x87_Reg reg) {
+				this->write_ubyte(0xDE);
+				this->write_ubyte(0xF8 + reg);
+			}
+
+			void fdivrp(x87_Reg reg) {
+				this->write_ubyte(0xDE);
+				this->write_ubyte(0xF0 + reg);
+			}
+
+			// TOP rotation does not change register tags; FFREE marks a slot empty.
+			void fincstp() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xF7);
+			}
+
+			void fdecstp() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xF6);
+			}
+
+			void fld1() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xE8);
+			}
+
+			void fldz() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xEE);
+			}
+
+			void fchs() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xE0);
+			}
+
+			void fabs() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xE1);
+			}
+
+			void fsqrt() {
+				this->write_ubyte(0xD9);
+				this->write_ubyte(0xFA);
+			}
+
 			void breakpoint() {
 				this->write_ubyte(0xCC);
 			}
