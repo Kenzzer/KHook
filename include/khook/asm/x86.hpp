@@ -30,6 +30,39 @@ namespace KHook
 			EDI =  7,
 		};
 		
+		enum x86FloatReg : std::uint8_t {
+			XMM0 = 0,
+			XMM1 = 1,
+			XMM2 = 2,
+			XMM3 = 3,
+			XMM4 = 4,
+			XMM5 = 5,
+			XMM6 = 6,
+			XMM7 = 7
+		};
+
+		class x86_FloatReg {
+		public:
+			constexpr x86_FloatReg(x86FloatReg op) : code(op) { }
+
+			constexpr bool operator==(x86_FloatReg a) const { return code == a.code; }
+			constexpr bool operator!=(x86_FloatReg a) const { return code != a.code; }
+
+			constexpr std::uint8_t low() const { return code & 0x7; }
+			constexpr operator x86FloatReg() const { return code; }
+		protected:
+			x86FloatReg code;
+		};
+
+		static const x86_FloatReg xmm0 = { x86FloatReg::XMM0 };
+		static const x86_FloatReg xmm1 = { x86FloatReg::XMM1 };
+		static const x86_FloatReg xmm2 = { x86FloatReg::XMM2 };
+		static const x86_FloatReg xmm3 = { x86FloatReg::XMM3 };
+		static const x86_FloatReg xmm4 = { x86FloatReg::XMM4 };
+		static const x86_FloatReg xmm5 = { x86FloatReg::XMM5 };
+		static const x86_FloatReg xmm6 = { x86FloatReg::XMM6 };
+		static const x86_FloatReg xmm7 = { x86FloatReg::XMM7 };
+
 		enum x87Reg : std::uint8_t {
 			ST0 = 0,
 			ST1 = 1,
@@ -65,6 +98,10 @@ namespace KHook
 				return (mod << 6) | ((reg & 0x7) << 3) | this->low();
 			}
 
+			inline std::uint8_t modrm(x86FloatReg reg) {
+				return (mod << 6) | ((reg & 0x7) << 3) | this->low();
+			}
+
 			inline std::uint8_t modrm() {
 				return (mod << 6) | (0x0 << 3) | this->low();
 			}
@@ -76,6 +113,7 @@ namespace KHook
 			void write_modm(GenBuffer* buffer);
 			void write_modrm(GenBuffer* buffer);
 			void write_modrm(GenBuffer* buffer, x86Reg op);
+			void write_modrm(GenBuffer* buffer, x86FloatReg op);
 
 			bool extended() const { return ((rm & 0x8) == 0x8); }
 			std::uint8_t low() const { return rm & 0x7; }
@@ -215,6 +253,25 @@ namespace KHook
 			}
 		}
 		
+		inline void x86_RegRm::write_modrm(GenBuffer* buffer, x86FloatReg reg) {
+			// modrm
+			buffer->write_ubyte(modrm(reg));
+
+			// Special register we need a sib byte
+			if (rm == x86Reg::ESP) {
+				buffer->write_ubyte(sib());
+			}
+
+			// Special disp mod
+			if (mod != DISP0) {
+				if (mod == DISP8) {
+					buffer->write_byte(disp);
+				} else if (mod == DISP32) {
+					buffer->write_int32(disp);
+				}
+			}
+		}
+
 		class x86_Jit : public GenBuffer {
 		public:
 			// Memory sizes are explicit: x87 memory operands carry no size information.
@@ -529,6 +586,20 @@ namespace KHook
 				this->write_ubyte(0xC7);
 				dst.write_modrm(this);
 				this->write_int32(imm);
+			}
+
+			void movsd(x86_FloatReg reg, x86_RegRm rm) {
+				this->write_ubyte(0xF2);
+				this->write_ubyte(0x0F);
+				this->write_ubyte(0x10);
+				rm.write_modrm(this, reg);
+			}
+
+			void movsd(x86_RegRm rm, x86_FloatReg reg) {
+				this->write_ubyte(0xF2);
+				this->write_ubyte(0x0F);
+				this->write_ubyte(0x11);
+				rm.write_modrm(this, reg);
 			}
 
 			void add(x86_Reg dst, x86_Reg src) {
