@@ -41,12 +41,12 @@ namespace KHook
 			XMM7 = 7
 		};
 
-		class x86_FloatReg {
+		class x86_Float_Reg {
 		public:
-			constexpr x86_FloatReg(x86FloatReg op) : code(op) { }
+			constexpr x86_Float_Reg(x86FloatReg op) : code(op) { }
 
-			constexpr bool operator==(x86_FloatReg a) const { return code == a.code; }
-			constexpr bool operator!=(x86_FloatReg a) const { return code != a.code; }
+			constexpr bool operator==(x86_Float_Reg a) const { return code == a.code; }
+			constexpr bool operator!=(x86_Float_Reg a) const { return code != a.code; }
 
 			constexpr std::uint8_t low() const { return code & 0x7; }
 			constexpr operator x86FloatReg() const { return code; }
@@ -54,14 +54,14 @@ namespace KHook
 			x86FloatReg code;
 		};
 
-		static const x86_FloatReg xmm0 = { x86FloatReg::XMM0 };
-		static const x86_FloatReg xmm1 = { x86FloatReg::XMM1 };
-		static const x86_FloatReg xmm2 = { x86FloatReg::XMM2 };
-		static const x86_FloatReg xmm3 = { x86FloatReg::XMM3 };
-		static const x86_FloatReg xmm4 = { x86FloatReg::XMM4 };
-		static const x86_FloatReg xmm5 = { x86FloatReg::XMM5 };
-		static const x86_FloatReg xmm6 = { x86FloatReg::XMM6 };
-		static const x86_FloatReg xmm7 = { x86FloatReg::XMM7 };
+		static const x86_Float_Reg xmm0 = { x86FloatReg::XMM0 };
+		static const x86_Float_Reg xmm1 = { x86FloatReg::XMM1 };
+		static const x86_Float_Reg xmm2 = { x86FloatReg::XMM2 };
+		static const x86_Float_Reg xmm3 = { x86FloatReg::XMM3 };
+		static const x86_Float_Reg xmm4 = { x86FloatReg::XMM4 };
+		static const x86_Float_Reg xmm5 = { x86FloatReg::XMM5 };
+		static const x86_Float_Reg xmm6 = { x86FloatReg::XMM6 };
+		static const x86_Float_Reg xmm7 = { x86FloatReg::XMM7 };
 
 		enum x87Reg : std::uint8_t {
 			ST0 = 0,
@@ -588,14 +588,14 @@ namespace KHook
 				this->write_int32(imm);
 			}
 
-			void movsd(x86_FloatReg reg, x86_RegRm rm) {
+			void movsd(x86_Float_Reg reg, x86_RegRm rm) {
 				this->write_ubyte(0xF2);
 				this->write_ubyte(0x0F);
 				this->write_ubyte(0x10);
 				rm.write_modrm(this, reg);
 			}
 
-			void movsd(x86_RegRm rm, x86_FloatReg reg) {
+			void movsd(x86_RegRm rm, x86_Float_Reg reg) {
 				this->write_ubyte(0xF2);
 				this->write_ubyte(0x0F);
 				this->write_ubyte(0x11);
