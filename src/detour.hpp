@@ -94,11 +94,11 @@ namespace KHook {
 		}
 
 		bool SetupVirtual(void** vtable, int index) {
-			auto entry = vtable + index;
-			KHook::Memory::SetAccess(entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ | KHook::Memory::Flags::WRITE);
-			_original_function = reinterpret_cast<std::uintptr_t>(*entry);
-			*entry = reinterpret_cast<void*>(_jit_func_ptr);
-			KHook::Memory::SetAccess(entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ);
+			_vtable_entry = reinterpret_cast<std::uintptr_t>(vtable + index);
+			KHook::Memory::SetAccess((void*)_vtable_entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ | KHook::Memory::Flags::WRITE);
+			_original_function = reinterpret_cast<std::uintptr_t>(*(void**)_vtable_entry);
+			*(void**)_vtable_entry = reinterpret_cast<void*>(_jit_func_ptr);
+			KHook::Memory::SetAccess((void*)_vtable_entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ);
 			// There's no way to predict whether or not the above code will crash, just always return true
 			return true;
 		}
@@ -161,6 +161,7 @@ namespace KHook {
 
 		// Detour details
 		std::uintptr_t _original_function;
+		std::uintptr_t _vtable_entry;
 		std::uint32_t _stack_size;
 
 		// Detour library details

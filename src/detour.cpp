@@ -533,6 +533,7 @@ DetourCapsule::DetourCapsule(std::uint32_t stack_size) :
 	_end_callbacks(nullptr),
 	_jit_func_ptr(0),
 	_original_function(0),
+	_vtable_entry(0),
 	_stack_size(((stack_size + 0xF) & ~0xF)) {
 	DEBUG_PRINT("DetourCapsule::ctor(_stack_size: %hd)\n", _stack_size)
 
@@ -1439,6 +1440,12 @@ DetourCapsule::~DetourCapsule() {
 	_callbacks.clear();
 	_start_callbacks = nullptr;
 	_end_callbacks = nullptr;
+
+	if (_vtable_entry != 0) {
+		KHook::Memory::SetAccess((void*)_vtable_entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ | KHook::Memory::Flags::WRITE);
+		*(void**)_vtable_entry = (void*)_original_function;
+		KHook::Memory::SetAccess((void*)_vtable_entry, sizeof(void*), KHook::Memory::Flags::EXECUTE | KHook::Memory::Flags::READ);
+	}
 
 	_detour_mutex.unlock();
 }
